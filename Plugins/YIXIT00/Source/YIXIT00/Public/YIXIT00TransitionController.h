@@ -17,6 +17,10 @@ class FJsonObject;
 class AYIXIT01FocusRig;
 class AYIXIT01ViewCamera;
 class AYIXIT01L01LightingRig;
+class ALevelSequenceActor;
+class UMaterialInterface;
+class UStaticMeshComponent;
+class ULightComponentBase;
 class SWidget;
 class IInputProcessor;
 
@@ -39,6 +43,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="YIXI Tests|T00") void TriggerTransition();
     UFUNCTION(BlueprintCallable, Category="YIXI Tests|T00") static FString InspectWorld(UWorld* World);
     UPROPERTY(EditInstanceOnly, Category="T01") TObjectPtr<AYIXIT01FocusRig> FocusRig;
+    // Formal maps use native light actors and the existing Sequencer player.
+    // Null keeps the frozen L01 regression maps on their existing path.
+    UPROPERTY(EditInstanceOnly, Category="T01|Sequencer") TObjectPtr<ALevelSequenceActor> LightStateSequence;
+    UPROPERTY(EditInstanceOnly, Category="T01|Diagnostics") TObjectPtr<UMaterialInterface> DiagnosticLitMaterial;
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="T01|Sequencer") int32 LightingSequenceFrame = -1;
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="T01|Sequencer") FString LightingBindingReport;
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="T01") EYIXIT01FocusState FocusState = EYIXIT01FocusState::Explore;
     bool HandleFocusEscapeFromViewport();
     UPROPERTY(EditAnywhere, Category="T00") float WarmupSeconds = 2.f;
@@ -55,6 +65,10 @@ private:
     UPROPERTY(Transient) TObjectPtr<ACameraActor> CameraA;
     UPROPERTY(Transient) TObjectPtr<ACameraActor> CameraB;
     UPROPERTY(Transient) TObjectPtr<AYIXIT01L01LightingRig> L01LightingRig;
+    UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> DiagnosticMeshes;
+    UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> DiagnosticOriginalMaterials;
+    UPROPERTY(Transient) TArray<TObjectPtr<ULightComponentBase>> DiagnosticSuppressedLights;
+    TArray<bool> DiagnosticOriginalVisibility;
     UPROPERTY(Transient) TObjectPtr<AActor> Destination;
     UPROPERTY(Transient) TArray<TObjectPtr<USceneCaptureComponent2D>> Captures;
     UPROPERTY(Transient) TArray<TObjectPtr<UTextureRenderTarget2D>> RenderTargets;
@@ -100,6 +114,10 @@ private:
     void SetFocusState(EYIXIT01FocusState State);
     FString FocusStateName() const;
     bool ResolveTestActors();
+    bool PrepareSequenceTransition(FString& Reason);
+    bool ApplySequenceLightingFrame(int32 Frame, FString& Reason);
+    TSharedRef<FJsonObject> SequenceLightingDiagnostics() const;
+    void RestoreSequenceDiagnostics();
     bool ScenesReady(FString* Reason = nullptr) const;
     bool SamePossession() const;
     void PrimeViews();

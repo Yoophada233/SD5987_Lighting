@@ -13,6 +13,7 @@ class UStaticMeshComponent;
 class ULightComponentBase;
 class APlayerController;
 class FJsonObject;
+class ALevelSequenceActor;
 
 UENUM(BlueprintType)
 enum class EYIXIL01Mode : uint8
@@ -31,8 +32,18 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool Prepare(APlayerController* Controller, FString& Reason);
-    void CameraBCutObserved();
+    // Existing one-shot only; optional development harness, never automatic input.
+    UFUNCTION(BlueprintCallable, Category="YIXI Tests|P03F1", meta=(DevelopmentOnly))
+    bool CameraBCutObserved();
     TSharedRef<FJsonObject> Diagnostics() const;
+
+    // Opt-in per map. Legacy test maps retain their serialized mode and behavior.
+    UPROPERTY(EditInstanceOnly, Category="P03|Sequencer") bool bSequenceOwnsLighting = false;
+    UPROPERTY(EditInstanceOnly, Category="P03|Sequencer") TObjectPtr<ALevelSequenceActor> LightStateSequence;
+    UPROPERTY(EditInstanceOnly, Category="P03|Sequencer") TObjectPtr<AActor> SequenceSkyAtmosphere;
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="P03|Sequencer") FString SequenceBindingReport;
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="P03|Sequencer") int32 AppliedSequenceFrame = -1;
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="P03|Sequencer") int32 LegacyWritesAfterSequenceReady = 0;
 
     UPROPERTY(EditAnywhere, Category="L01") EYIXIL01Mode Mode = EYIXIL01Mode::LocalPrelit;
     // Legacy serialized fields: retained for existing maps, hidden from Details.
@@ -80,4 +91,6 @@ private:
     void Configure();
     void ApplyGlobal(bool bUseNight);
     void RestoreOverrides();
+    bool BindLightSequence(FString& Reason);
+    bool ApplySequenceFrame(int32 Frame, FString& Reason);
 };

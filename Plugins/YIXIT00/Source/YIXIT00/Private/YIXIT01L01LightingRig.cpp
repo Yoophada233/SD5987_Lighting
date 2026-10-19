@@ -12,6 +12,17 @@
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
+#include "Components/SkyAtmosphereComponent.h"
+#include "LevelSequence.h"
+#include "LevelSequenceActor.h"
+#include "LevelSequencePlayer.h"
+#include "MovieScene.h"
+#include "MovieSceneBindingOverrides.h"
+#include "MovieScenePossessable.h"
+#include "MovieSceneTrack.h"
+#include "MovieSceneSection.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogYIXIL01, Log, All);
 
@@ -53,6 +64,12 @@ void AYIXIT01L01LightingRig::OnConstruction(const FTransform& Transform)
 }
 void AYIXIT01L01LightingRig::Configure()
 {
+    if (bSequenceOwnsLighting)
+    {
+        FString Reason;
+        if (!BindLightSequence(Reason)) SequenceBindingReport=Reason;
+        return; // No legacy rotation, light, sky or exposure writes in P03.
+    }
     const bool bLocal = Mode==EYIXIL01Mode::LocalPrelit;
     // Never re-author local component settings here. Construction, mode changes
     // and Prepare must preserve native instance edits, including hidden lights.
@@ -78,8 +95,95 @@ void AYIXIT01L01LightingRig::Configure()
     S.bOverride_LocalExposureMiddleGreyBias=true; S.LocalExposureMiddleGreyBias=0;
     // Do not override GI/reflections, Lumen cache/update speeds, or project CVars.
 }
+bool AYIXIT01L01LightingRig::BindLightSequence(FString& Reason)
+{
+    if (!LightStateSequence || LightStateSequence->GetWorld()!=GetWorld()
+        || !LightStateSequence->GetSequence() || !LightStateSequence->BindingOverrides)
+    { Reason=TEXT("P03 needs the Master-local LevelSequenceActor with a saved Sequence"); return false; }
+    UMovieScene* Scene=LightStateSequence->GetSequence()->GetMovieScene();
+    if (!Scene || Scene->GetPossessableCount()==0 || Scene->GetSpawnableCount()!=0)
+    { Reason=TEXT("P03 expects existing lighting possessables, no spawnables"); return false; }
+    TArray<TPair<FMovieSceneObjectBindingID,UObject*>> Bindings;
+    TArray<TSharedPtr<FJsonValue>> Records;
+    for (int32 I=0;I<Scene->GetPossessableCount();++I)
+    {
+        const FMovieScenePossessable& P=Scene->GetPossessable(I);
+        const FMovieScenePossessable* Root=&P;
+        for (int32 Depth=0;Root->GetParent().IsValid() && Depth<Scene->GetPossessableCount();++Depth)
+        {
+            Root=Scene->FindPossessable(Root->GetParent());
+            if (!Root) { Reason=TEXT("P03 broken parent binding"); return false; }
+        }
+        const FString Name=Root->GetName();
+        UObject* Target=nullptr;
+        // Actor/component bindings both resolve to the actual Master component.
+        // Transform tracks support USceneComponent; PP settings share FPostProcessSettings.
+        if (Name.Contains(TEXT("DirectionalLight"))) Target=Sun.Get();
+        else if (Name.Contains(TEXT("SkyLight"))) Target=Sky.Get();
+        else if (Name.Contains(TEXT("PostProcessVolume"))) Target=Exposure.Get();
+        else if (Name.Contains(TEXT("SkyAtmosphere")) && SequenceSkyAtmosphere)
+            Target=P.GetParent().IsValid() ? static_cast<UObject*>(SequenceSkyAtmosphere->FindComponentByClass<USkyAtmosphereComponent>()) : SequenceSkyAtmosphere.Get();
+        if (!Target)
+        { Reason=TEXT("P03 unmapped existing track; preserve and explicitly adapt: ")+P.GetName()+TEXT(" / ")+Name; return false; }
+        auto Record=MakeShared<FJsonObject>();
+        Record->SetStringField(TEXT("binding"),P.GetName());
+        Record->SetStringField(TEXT("guid"),P.GetGuid().ToString());
+        Record->SetStringField(TEXT("target"),Target->GetPathName());
+        TArray<TSharedPtr<FJsonValue>> Tracks;
+        if (const auto* Binding=Scene->FindBinding(P.GetGuid()))
+            for (const auto* Track : Binding->GetTracks())
+            {
+                Tracks.Add(MakeShared<FJsonValueString>(Track->GetClass()->GetName()+TEXT(":")+Track->GetName()));
+                const FFrameNumber NightTick=FFrameRate::TransformTime(FFrameTime(30),Scene->GetDisplayRate(),Scene->GetTickResolution()).FloorToFrame();
+                bool bNightCovered=false;
+                for (const auto* Section : Track->GetAllSections())
+                    if (Section && Section->IsActive() && Section->GetRange().Contains(NightTick)) bNightCovered=true;
+                if (!bNightCovered)
+                { Reason=TEXT("P03 track does not cover frame 30: ")+Track->GetPathName(); return false; }
+            }
+        Record->SetArrayField(TEXT("tracks"),Tracks); Records.Add(MakeShared<FJsonValueObject>(Record));
+        Bindings.Emplace(FMovieSceneObjectBindingID(UE::MovieScene::FFixedObjectBindingID(P.GetGuid(),MovieSceneSequenceID::Root)),Target);
+    }
+    // Only after every existing binding is understood, replace defaults completely.
+    for (const auto& Binding : Bindings)
+    {
+        LightStateSequence->BindingOverrides->SetBinding(Binding.Key,{Binding.Value},false);
+        if (auto* Player=LightStateSequence->GetSequencePlayer()) Player->RequestInvalidateBinding(Binding.Key);
+    }
+    auto Info=MakeShared<FJsonObject>();
+    Info->SetStringField(TEXT("sequence"),LightStateSequence->GetSequence()->GetPathName());
+    Info->SetArrayField(TEXT("bindings"),Records);
+    FJsonSerializer::Serialize(Info,TJsonWriterFactory<>::Create(&SequenceBindingReport));
+    return true;
+}
+bool AYIXIT01L01LightingRig::ApplySequenceFrame(int32 Frame,FString& Reason)
+{
+    auto* Player=LightStateSequence ? LightStateSequence->GetSequencePlayer() : nullptr;
+    if (!Player) { Reason=TEXT("P03 native SequencePlayer is not initialized"); return false; }
+    UMovieScene* Scene=LightStateSequence->GetSequence()->GetMovieScene();
+    for (int32 I=0;I<Scene->GetPossessableCount();++I)
+    {
+        const auto& P=Scene->GetPossessable(I);
+        const FMovieSceneObjectBindingID ID(UE::MovieScene::FFixedObjectBindingID(P.GetGuid(),MovieSceneSequenceID::Root));
+        const auto Objects=Player->GetBoundObjects(ID);
+        if (Objects.Num()!=1 || !Objects[0] || Objects[0]->GetWorld()!=GetWorld())
+        { Reason=TEXT("P03 binding is not unique and Master-local: ")+P.GetName(); return false; }
+    }
+    Player->SetCompletionModeOverride(EMovieSceneCompletionModeOverride::ForceKeepState);
+    Player->Pause();
+    FMovieSceneSequencePlaybackParams Params(FFrameTime(Frame),EUpdatePositionMethod::Jump);
+    Params.bHasJumped=true;
+    Player->SetPlaybackPosition(Params);
+    if (Player->IsPlaying() || Player->GetCurrentTime().Time.FrameNumber.Value!=Frame)
+    { Reason=TEXT("P03 player did not hold the requested display frame"); return false; }
+    AppliedSequenceFrame=Frame; bNight=(Frame==30);
+    UE_LOG(LogYIXIL01,Display,TEXT("[YIXI_P03] SEQUENCE_JUMP frame=%d engine_frame=%llu player=%s playing=0 legacy_lighting=DISABLED sun=%g sky=%g exposure_bias=%g"),
+        Frame,GFrameCounter,*Player->GetPathName(),Sun->Intensity,Sky->Intensity,Exposure->Settings.AutoExposureBias);
+    return true;
+}
 void AYIXIT01L01LightingRig::ApplyGlobal(bool bUseNight)
 {
+    if (bSequenceOwnsLighting) { ++LegacyWritesAfterSequenceReady; return; }
     bNight=bUseNight;
     Sun->SetIntensity(bNight?NightSunLux:DaySunLux);
     Sun->SetLightColor(bNight?NightColor:DayColor,false);
@@ -92,10 +196,10 @@ bool AYIXIT01L01LightingRig::Prepare(APlayerController* Controller,FString& Reas
     if (!Controller || !Controller->PlayerCameraManager || !DiagnosticLitMaterial
         || DiagnosticLitMaterial->GetShadingModels().HasShadingModel(MSM_Unlit))
     { Reason=TEXT("L01 needs a local camera manager and a preloaded lit diagnostic material"); return false; }
-    if (Mode!=EYIXIL01Mode::LocalPrelit && !DiagnosticSkyCubemap)
+    if (!bSequenceOwnsLighting && Mode!=EYIXIL01Mode::LocalPrelit && !DiagnosticSkyCubemap)
     { Reason=TEXT("L01 global test requires a preloaded specified SkyLight cubemap"); return false; }
-    Configure();
-    if (Mode==EYIXIL01Mode::LocalPrelit)
+    if (!bSequenceOwnsLighting) Configure();
+    if (!bSequenceOwnsLighting && Mode==EYIXIL01Mode::LocalPrelit)
         for (auto* Day : {DayKey.Get(),DayFill.Get()}) for (auto* Night : {NightKey.Get(),NightFill.Get()})
             if (FVector::Dist(Day->GetComponentLocation(),Night->GetComponentLocation())
                 <=Day->AttenuationRadius+Night->AttenuationRadius)
@@ -124,6 +228,12 @@ bool AYIXIT01L01LightingRig::Prepare(APlayerController* Controller,FString& Reas
         }
     }
     PC=Controller;
+    if (bSequenceOwnsLighting)
+    {
+        if (!BindLightSequence(Reason) || !ApplySequenceFrame(0,Reason)) return false;
+        LegacyWritesAfterSequenceReady=0;
+        SetActorTickEnabled(false); // Sequencer owns exposure; no cached PP override.
+    }
     for (const TObjectPtr<ULightComponentBase>& LightPtr : SuppressedLights)
     {
         ULightComponentBase* Light = LightPtr.Get();
@@ -133,8 +243,9 @@ bool AYIXIT01L01LightingRig::Prepare(APlayerController* Controller,FString& Reas
     { ChangedMeshes.Add(Mesh); OriginalMaterials.Add(Mesh->GetMaterial(0)); Mesh->SetMaterial(0,DiagnosticLitMaterial); }
     AddTickPrerequisiteActor(Controller);
     bPrepared=true;
-    UE_LOG(LogYIXIL01,Display,TEXT("[YIXI_L01] READY mode=%d lit_meshes=%d exposure=Manual bias=%.2f; GPU/Lumen convergence UNVERIFIED"),
-        static_cast<int32>(Mode),ChangedMeshes.Num(),ExposureCompensation);
+    if (!bSequenceOwnsLighting)
+        UE_LOG(LogYIXIL01,Display,TEXT("[YIXI_L01] READY mode=%d lit_meshes=%d exposure=Manual bias=%.2f; GPU/Lumen convergence UNVERIFIED"),
+            static_cast<int32>(Mode),ChangedMeshes.Num(),ExposureCompensation);
     return true;
 }
 void AYIXIT01L01LightingRig::Tick(float DeltaSeconds)
@@ -142,15 +253,24 @@ void AYIXIT01L01LightingRig::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     // Runs after the original camera evaluation and the T00 controller. Changes
     // exposure only; never writes Transform/FOV or any Gameplay Camera asset.
-    if (bPrepared && PC.IsValid() && PC->PlayerCameraManager && ExposureFrame!=GFrameCounter)
+    if (!bSequenceOwnsLighting && bPrepared && PC.IsValid() && PC->PlayerCameraManager && ExposureFrame!=GFrameCounter)
     {
         PC->PlayerCameraManager->AddCachedPPBlend(Exposure->Settings,1,VTBlendOrder_Override);
         ExposureFrame=GFrameCounter;
     }
 }
-void AYIXIT01L01LightingRig::CameraBCutObserved()
+bool AYIXIT01L01LightingRig::CameraBCutObserved()
 {
-    if (!bPrepared || ChangeFrame!=0) return;
+    if (!bPrepared) return false;
+    if (ChangeFrame!=0) return true;
+    if (bSequenceOwnsLighting)
+    {
+        FString Reason;
+        if (!ApplySequenceFrame(30,Reason))
+        { UE_LOG(LogYIXIL01,Error,TEXT("[YIXI_P03] FRAME_30_FAILED %s"),*Reason); return false; }
+        ChangeFrame=GFrameCounter;
+        return true;
+    }
     ChangeFrame=GFrameCounter;
     SwitchRecord=MakeShared<FJsonObject>();
     SwitchRecord->SetNumberField(TEXT("before_directional_lux"),Sun->Intensity);
@@ -167,10 +287,20 @@ void AYIXIT01L01LightingRig::CameraBCutObserved()
     SwitchRecord->SetBoolField(TEXT("processed_sky_texture_pointer_present_NOT_GPU_readiness"),Sky->GetProcessedSkyTexture()!=nullptr);
     UE_LOG(LogYIXIL01,Display,TEXT("[YIXI_L01] CAMERA_B_OBSERVED frame=%llu global_setters=%d; no load/recapture; rendered response UNMEASURED"),
         ChangeFrame,Mode==EYIXIL01Mode::GlobalSwitchAtCut);
+    return true;
 }
 TSharedRef<FJsonObject> AYIXIT01L01LightingRig::Diagnostics() const
 {
     auto R=MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("sequence_owns_lighting"),bSequenceOwnsLighting);
+    if (bSequenceOwnsLighting)
+    {
+        R->SetStringField(TEXT("sequence_actor"),GetPathNameSafe(LightStateSequence.Get()));
+        R->SetStringField(TEXT("sequence_binding_report"),SequenceBindingReport);
+        R->SetNumberField(TEXT("sequence_frame"),AppliedSequenceFrame);
+        R->SetNumberField(TEXT("legacy_writes_after_sequence_ready"),LegacyWritesAfterSequenceReady);
+        R->SetBoolField(TEXT("legacy_exposure_tick_enabled"),false);
+    }
     R->SetStringField(TEXT("mode"),StaticEnum<EYIXIL01Mode>()->GetNameStringByValue(static_cast<int64>(Mode)));
     R->SetBoolField(TEXT("prepared"),bPrepared); R->SetBoolField(TEXT("global_night_state"),bNight);
     R->SetNumberField(TEXT("camera_b_observed_frame"),static_cast<double>(ChangeFrame));
@@ -183,7 +313,7 @@ TSharedRef<FJsonObject> AYIXIT01L01LightingRig::Diagnostics() const
     R->SetStringField(TEXT("skylight_color"),Sky->LightColor.ToString());
     R->SetStringField(TEXT("skylight_source"),TEXT("SpecifiedCubemap; unchanged at cut; RealTimeCapture=false"));
     R->SetNumberField(TEXT("cut_recapture_calls_by_L01"),0);
-    R->SetStringField(TEXT("fixed_exposure"),TEXT("Manual; PhysicalCamera=false; camera override PP blend applied each frame"));
+    R->SetStringField(TEXT("fixed_exposure"),bSequenceOwnsLighting ? TEXT("Sequencer owns exposure; no legacy cached PP blend") : TEXT("Manual; PhysicalCamera=false; camera override PP blend applied each frame"));
     R->SetNumberField(TEXT("exposure_compensation"),ExposureCompensation);
     R->SetStringField(TEXT("local_settings_source"),TEXT("Serialized native point-light components; mode controls visibility only"));
     auto LocalState=[](const UPointLightComponent* Light)

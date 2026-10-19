@@ -7,6 +7,15 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/DirectionalLightComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "LevelSequence.h"
+#include "LevelSequenceActor.h"
+#include "LevelSequencePlayer.h"
+#include "MovieScene.h"
+#include "MovieScenePossessable.h"
 #include "Core/CameraAsset.h"
 #include "Dom/JsonObject.h"
 #include "Engine/GameViewportClient.h"
@@ -186,18 +195,125 @@ bool AYIXIT00TransitionController::ResolveTestActors()
     Event(TEXT("T00_INPUT_BOUND"));
     FString FocusReason;
     if (!SetupFocusInteraction(FocusReason)) { Finish(false, FocusReason); return false; }
-    TArray<AActor*> LightingRigs;
-    UGameplayStatics::GetAllActorsOfClass(this,AYIXIT01L01LightingRig::StaticClass(),LightingRigs);
-    if (LightingRigs.Num()>1) { Finish(false,TEXT("Multiple L01 lighting rigs; keep scene and resolve manually")); return false; }
-    if (LightingRigs.Num()==1)
+    if (LightStateSequence)
     {
-        L01LightingRig=Cast<AYIXIT01L01LightingRig>(LightingRigs[0]);
-        if (!L01LightingRig->Prepare(PC,FocusReason)) { Finish(false,FocusReason); return false; }
-        L01LightingRig->AddTickPrerequisiteActor(this);
-        Event(TEXT("T01_L01_LIGHTING_READY"));
+        if (!PrepareSequenceTransition(FocusReason)) { Finish(false,FocusReason); return false; }
+        Event(TEXT("T01_NATIVE_SEQUENCE_READY"));
+    }
+    else
+    {
+        TArray<AActor*> LightingRigs;
+        UGameplayStatics::GetAllActorsOfClass(this,AYIXIT01L01LightingRig::StaticClass(),LightingRigs);
+        if (LightingRigs.Num()>1) { Finish(false,TEXT("Multiple L01 lighting rigs; keep scene and resolve manually")); return false; }
+        if (LightingRigs.Num()==1)
+        {
+            L01LightingRig=Cast<AYIXIT01L01LightingRig>(LightingRigs[0]);
+            if (!L01LightingRig->Prepare(PC,FocusReason)) { Finish(false,FocusReason); return false; }
+            L01LightingRig->AddTickPrerequisiteActor(this);
+            Event(TEXT("T01_L01_LIGHTING_READY"));
+        }
     }
     PrimeViews();
     return true;
+}
+bool AYIXIT00TransitionController::ApplySequenceLightingFrame(int32 Frame,FString& Reason)
+{
+    auto* Player=LightStateSequence ? LightStateSequence->GetSequencePlayer() : nullptr;
+    auto* Sequence=LightStateSequence ? LightStateSequence->GetSequence() : nullptr;
+    auto* Scene=Sequence ? Sequence->GetMovieScene() : nullptr;
+    if (!Player || !Scene || Scene->GetPossessableCount()==0 || Scene->GetSpawnableCount()!=0)
+    { Reason=TEXT("T01 needs the existing initialized lighting SequencePlayer and local possessables"); return false; }
+    TArray<TSharedPtr<FJsonValue>> Bindings;
+    for (int32 I=0;I<Scene->GetPossessableCount();++I)
+    {
+        const auto& P=Scene->GetPossessable(I);
+        const FMovieSceneObjectBindingID ID(UE::MovieScene::FFixedObjectBindingID(P.GetGuid(),MovieSceneSequenceID::Root));
+        const auto Objects=Player->GetBoundObjects(ID);
+        if (Objects.Num()!=1 || !Objects[0] || Objects[0]->GetWorld()!=GetWorld())
+        { Reason=TEXT("T01 lighting binding is not unique and World-local: ")+P.GetName(); return false; }
+        if (Objects[0]->IsA<AYIXIT01L01LightingRig>() || Objects[0]->GetTypedOuter<AYIXIT01L01LightingRig>())
+        { Reason=TEXT("T01 lighting still targets a retired L01 rig: ")+P.GetName(); return false; }
+        auto Item=MakeShared<FJsonObject>();
+        Item->SetStringField(TEXT("binding"),P.GetName());
+        Item->SetStringField(TEXT("target"),Objects[0]->GetPathName());
+        Bindings.Add(MakeShared<FJsonValueObject>(Item));
+    }
+    auto Info=MakeShared<FJsonObject>();
+    Info->SetStringField(TEXT("sequence"),Sequence->GetPathName());
+    Info->SetArrayField(TEXT("bindings"),Bindings);
+    LightingBindingReport=Encode(Info);
+    Player->SetCompletionModeOverride(EMovieSceneCompletionModeOverride::ForceKeepState);
+    Player->Pause();
+    FMovieSceneSequencePlaybackParams Params(FFrameTime(Frame),EUpdatePositionMethod::Jump);
+    Params.bHasJumped=true;
+    Player->SetPlaybackPosition(Params);
+    if (Player->IsPlaying() || Player->GetCurrentTime().Time.FrameNumber.Value!=Frame)
+    { Reason=TEXT("T01 lighting player failed to hold the requested frame"); return false; }
+    LightingSequenceFrame=Frame;
+    UE_LOG(LogYIXIT00,Display,TEXT("[YIXI_T01] NATIVE_SEQUENCE_JUMP frame=%d engine_frame=%llu player=%s L01=UNUSED"),
+        Frame,GFrameCounter,*Player->GetPathName());
+    return true;
+}
+bool AYIXIT00TransitionController::PrepareSequenceTransition(FString& Reason)
+{
+    if (!DiagnosticLitMaterial || DiagnosticLitMaterial->GetShadingModels().HasShadingModel(MSM_Unlit))
+    { Reason=TEXT("T01 diagnostic material must be the existing preloaded lit material"); return false; }
+    TArray<UStaticMeshComponent*> Targets;
+    for (const TCHAR* Tag : {TEXT("T00_FloorA"),TEXT("T00_BackdropA"),TEXT("T00_BodyA"),TEXT("T00_HeadA"),
+                             TEXT("T00_FloorB"),TEXT("T00_BackdropB"),TEXT("T00_BodyB"),TEXT("T00_HeadB")})
+    {
+        TArray<AActor*> Found; UGameplayStatics::GetAllActorsWithTag(this,FName(Tag),Found);
+        auto* Mesh=Found.Num()==1 ? Found[0]->FindComponentByClass<UStaticMeshComponent>() : nullptr;
+        if (!Mesh || Mesh->GetNumMaterials()!=1)
+        { Reason=FString::Printf(TEXT("T01 expected one diagnostic mesh for %s"),Tag); return false; }
+        Targets.Add(Mesh);
+    }
+    TArray<AActor*> Actors; UGameplayStatics::GetAllActorsOfClass(this,AActor::StaticClass(),Actors);
+    for (AActor* Actor : Actors)
+    {
+        TArray<ULightComponentBase*> Lights; Actor->GetComponents(Lights);
+        for (auto* Light : Lights)
+        {
+            if (!(Light->IsA<UDirectionalLightComponent>() || Light->IsA<USkyLightComponent>()) || !Light->IsVisible()) continue;
+            if (Actor->ActorHasTag(TEXT("YIXI_SequenceLight"))) continue;
+            if (!Actor->ActorHasTag(TEXT("T00_TestLight")) || !Light->IsA<UDirectionalLightComponent>())
+            { Reason=TEXT("T01 found an uncontrolled global light: ")+Light->GetPathName(); return false; }
+            DiagnosticSuppressedLights.Add(Light); DiagnosticOriginalVisibility.Add(Light->IsVisible());
+        }
+    }
+    if (!ApplySequenceLightingFrame(0,Reason)) return false;
+    for (const auto& Light : DiagnosticSuppressedLights) Light->SetVisibility(false);
+    for (auto* Mesh : Targets)
+    { DiagnosticMeshes.Add(Mesh); DiagnosticOriginalMaterials.Add(Mesh->GetMaterial(0)); Mesh->SetMaterial(0,DiagnosticLitMaterial); }
+    return true;
+}
+TSharedRef<FJsonObject> AYIXIT00TransitionController::SequenceLightingDiagnostics() const
+{
+    auto Info=MakeShared<FJsonObject>();
+    Info->SetBoolField(TEXT("legacy_rig_used"),L01LightingRig!=nullptr);
+    Info->SetNumberField(TEXT("sequence_frame"),LightingSequenceFrame);
+    Info->SetStringField(TEXT("binding_report"),LightingBindingReport);
+    Info->SetNumberField(TEXT("diagnostic_material_overrides"),DiagnosticMeshes.Num());
+    Info->SetBoolField(TEXT("playing"),LightStateSequence && LightStateSequence->GetSequencePlayer() && LightStateSequence->GetSequencePlayer()->IsPlaying());
+    return Info;
+}
+void AYIXIT00TransitionController::RestoreSequenceDiagnostics()
+{
+    const int32 Expected=DiagnosticMeshes.Num();
+    int32 Restored=0;
+    for (int32 I=0;I<Expected;++I)
+        if (IsValid(DiagnosticMeshes[I]))
+        { DiagnosticMeshes[I]->SetMaterial(0,DiagnosticOriginalMaterials[I]); if (DiagnosticMeshes[I]->GetMaterial(0)==DiagnosticOriginalMaterials[I]) ++Restored; }
+    for (int32 I=0;I<DiagnosticSuppressedLights.Num();++I)
+        if (IsValid(DiagnosticSuppressedLights[I])) DiagnosticSuppressedLights[I]->SetVisibility(DiagnosticOriginalVisibility[I]);
+    DiagnosticMeshes.Reset(); DiagnosticOriginalMaterials.Reset(); DiagnosticSuppressedLights.Reset(); DiagnosticOriginalVisibility.Reset();
+    if (Expected==0) return;
+    auto Info=MakeShared<FJsonObject>();
+    Info->SetStringField(TEXT("world"),GetPathNameSafe(GetWorld()));
+    Info->SetNumberField(TEXT("expected"),Expected); Info->SetNumberField(TEXT("restored"),Restored);
+    const FString Path=FPaths::Combine(FPaths::ProjectSavedDir(),TEXT("YIXI/Reports/YIXI_T01_MATERIAL_RESTORE_")+FGuid::NewGuid().ToString(EGuidFormats::Digits)+TEXT(".json"));
+    FFileHelper::SaveStringToFile(Encode(Info),*Path,FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,&IFileManager::Get(),FILEWRITE_NoReplaceExisting);
+    UE_LOG(LogYIXIT00,Display,TEXT("[YIXI_T01] DIAGNOSTIC_MATERIALS_RESTORED %d/%d JSON=%s"),Restored,Expected,*Path);
 }
 void AYIXIT00TransitionController::PrimeViews()
 {
@@ -225,6 +341,11 @@ void AYIXIT00TransitionController::Event(const FString& Name)
     Row->SetStringField(TEXT("focus_state"), FocusStateName());
     Row->SetBoolField(TEXT("same_possession"), SamePossession());
     Row->SetStringField(TEXT("view_target"), PC ? GetPathNameSafe(PC->GetViewTarget()) : TEXT("UNAVAILABLE"));
+    if (PC && PC->PlayerCameraManager)
+    {
+        Row->SetBoolField(TEXT("native_camera_cut_flag"),PC->PlayerCameraManager->bGameCameraCutThisFrame);
+        Row->SetArrayField(TEXT("camera_cache_location"),XYZ(PC->PlayerCameraManager->GetCameraLocation()));
+    }
     if (TestPawn) Row->SetArrayField(TEXT("pawn_location"), XYZ(TestPawn->GetActorLocation()));
     Events.Add(Row);
     UE_LOG(LogYIXIT00, Display, TEXT("[YIXI_T00] %s frame=%llu t=%.3f"), *Name, GFrameCounter, FPlatformTime::Seconds()-StartedAt);
@@ -339,7 +460,17 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
         if (PC->GetViewTarget()==CameraB && PC->PlayerCameraManager && FVector::Dist(PC->PlayerCameraManager->GetCameraLocation(),CameraB->GetActorLocation())<1.0)
         {
             // Actual Camera_B cache is now confirmed, rather than the earlier cut request.
-            if (L01LightingRig) { L01LightingRig->CameraBCutObserved(); Event(TEXT("T01_L01_CUT_OBSERVED")); }
+            if (LightStateSequence)
+            {
+                FString LightingReason;
+                if (!ApplySequenceLightingFrame(30,LightingReason)) { Finish(false,LightingReason); return; }
+                Event(TEXT("T01_NATIVE_SEQUENCE_CUT_OBSERVED"));
+            }
+            else if (L01LightingRig)
+            {
+                if (!L01LightingRig->CameraBCutObserved()) { Finish(false,TEXT("P03 Sequence frame 30 failed; see lighting diagnostic")); return; }
+                Event(L01LightingRig->bSequenceOwnsLighting ? TEXT("T01_P03_SEQUENCE_CUT_OBSERVED") : TEXT("T01_L01_CUT_OBSERVED"));
+            }
             Phase=EPhase::Night; PhaseAt=Now; CutObservedFrame=GFrameCounter; Event(TEXT("CameraCutObserved")); Event(TEXT("T00_CAMERA_CUT"));
         }
         else if (Now-PhaseAt>2) Finish(false,TEXT("Hard cut did not reach Camera_B; possible camera ownership conflict"));
@@ -422,6 +553,7 @@ void AYIXIT00TransitionController::Finish(bool bFunctional, const FString& Reaso
     Frames.Sort([](const TSharedPtr<FJsonObject>& A, const TSharedPtr<FJsonObject>& B) { return A->GetNumberField(TEXT("frame")) < B->GetNumberField(TEXT("frame")); });
     Result->SetStringField(TEXT("focus_state"), FocusStateName());
     if (L01LightingRig) Result->SetObjectField(TEXT("l01_lighting"),L01LightingRig->Diagnostics());
+    if (LightStateSequence) Result->SetObjectField(TEXT("sequencer_lighting"),SequenceLightingDiagnostics());
     Result->SetArrayField(TEXT("events"),Values(Events)); Result->SetArrayField(TEXT("frames"),Values(Frames));
     const FString Folder=FPaths::Combine(FPaths::ProjectSavedDir(),TEXT("YIXI/Reports"));
     IFileManager::Get().MakeDirectory(*Folder,true);
@@ -441,6 +573,7 @@ void AYIXIT00TransitionController::Finish(bool bFunctional, const FString& Reaso
 void AYIXIT00TransitionController::EndPlay(const EEndPlayReason::Type Reason)
 {
     bSessionEnding = true;
+    RestoreSequenceDiagnostics();
     if (Result.IsValid() && !bReportWritten) Finish(false,TEXT("Play ended before test report completed"));
     RestoreInput();
     ShutdownFocusInteraction();
