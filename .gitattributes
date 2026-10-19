@@ -1,0 +1,14 @@
+# Unreal packages use native Git binary attributes and no content filter.
+*.uasset binary -filter
+*.umap binary -filter
+*.ubulk binary -filter
+*.uexp binary -filter
+
+# Ordinary source/config/documentation files remain in normal Git.
+*.cpp text
+*.h text
+*.cs text
+*.ini text
+*.md text
+*.uproject text
+*.uplugin text

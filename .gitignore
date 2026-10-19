@@ -1,0 +1,53 @@
+# Unreal generated/local data; Content, Config, Source and Build remain shareable.
+/Saved/
+/Intermediate/
+/DerivedDataCache/
+/Binaries/
+/Plugins/**/Intermediate/
+/Plugins/**/Binaries/
+/Plugins/**/Saved/
+/Plugins/**/DerivedDataCache/
+
+# Personal editor content. Shared collections remain eligible.
+/Content/Developers/
+/Content/Collections/*_Local.collection
+/Content/Collections/*_Private.collection
+/Config/User*.ini
+/Config/WindowsEditor/EditorPerProjectUserSettings.ini
+
+# IDE / generated project files
+.vs/
+.idea/
+.vscode/
+*.sln
+*.suo
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.xcodeproj/
+*.xcworkspace/
+
+# Temporary files and personal backups
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+.DS_Store
+Thumbs.db
+
+# Local credentials (never store secrets in project INI files)
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+
+# Keep *_BuiltData.uasset, ExternalActors/ExternalObjects and required Build assets.
