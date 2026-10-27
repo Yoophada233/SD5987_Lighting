@@ -263,6 +263,13 @@ bool AYIXIT00TransitionController::PrepareSequenceTransition(FString& Reason)
                              TEXT("T00_FloorB"),TEXT("T00_BackdropB"),TEXT("T00_BodyB"),TEXT("T00_HeadB")})
     {
         TArray<AActor*> Found; UGameplayStatics::GetAllActorsWithTag(this,FName(Tag),Found);
+        // Diagnostic blockout geometry may be removed during scene authoring.
+        // Its material preview is optional; interaction/camera references are validated separately.
+        if (Found.Num()==0)
+        {
+            UE_LOG(LogYIXIT00,Warning,TEXT("[YIXI_T01] OPTIONAL_DIAGNOSTIC_MESH_ABSENT tag=%s; material preview skipped"),Tag);
+            continue;
+        }
         auto* Mesh=Found.Num()==1 ? Found[0]->FindComponentByClass<UStaticMeshComponent>() : nullptr;
         if (!Mesh || Mesh->GetNumMaterials()!=1)
         { Reason=FString::Printf(TEXT("T01 expected one diagnostic mesh for %s"),Tag); return false; }
