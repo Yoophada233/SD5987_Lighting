@@ -1,0 +1,8 @@
+{
+	"BuildId": "55116800",
+	"Modules": 
+	{
+		"BlockoutToolsEditorPlugin": "libUnrealEditor-BlockoutToolsEditorPlugin.dylib",
+		"BlockoutToolsPlugin": "libUnrealEditor-BlockoutToolsPlugin.dylib"
+	}
+}
