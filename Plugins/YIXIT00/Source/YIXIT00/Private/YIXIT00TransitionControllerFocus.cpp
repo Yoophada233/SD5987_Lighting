@@ -155,6 +155,11 @@ void AYIXIT00TransitionController::InteractionPressed()
     }
     else if (FocusState==EYIXIT01FocusState::FocusHold && bConfirmArmed)
     {
+        if (bUsePhaseStreaming && !P04CutReady())
+        {
+            bConfirmArmed=false; bP04PendingConfirm=true; RequestP04Night();
+            Event(TEXT("P04_CONFIRM_WAITING_IN_DAY_CLOSEUP")); return;
+        }
         if (!ScenesReady() || !SamePossession() || PC->GetViewTarget()!=CameraA)
         { FocusFailure(TEXT("Cannot confirm: scenes, possession or day closeup changed")); return; }
         bConfirmArmed = false;
@@ -175,6 +180,7 @@ void AYIXIT00TransitionController::InteractionReleased()
 
 void AYIXIT00TransitionController::CancelFocus()
 {
+    if (bUsePhaseStreaming) bP04PendingConfirm=false;
     if (FocusState==EYIXIT01FocusState::FocusHold) BeginFocusReturn(false);
 }
 
@@ -275,6 +281,7 @@ void AYIXIT00TransitionController::BeginFocusEnter()
     PC->SetViewTarget(FocusViewCamera);
     bEntryCameraSamplePending=true;
     SetFocusState(EYIXIT01FocusState::FocusEnter);
+    if (bUsePhaseStreaming) RequestP04Night();
     Result->SetNumberField(TEXT("focus_entry_snapshot_fov"),FocusStartView.FOV);
     Event(TEXT("T01_CAPTURED_ACTUAL_PCM_VIEW"));
 }

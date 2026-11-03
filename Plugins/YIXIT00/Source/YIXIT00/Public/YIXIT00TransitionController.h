@@ -23,6 +23,7 @@ class UStaticMeshComponent;
 class ULightComponentBase;
 class SWidget;
 class IInputProcessor;
+class ULevelStreaming;
 
 UENUM(BlueprintType)
 enum class EYIXIT01FocusState : uint8
@@ -55,6 +56,11 @@ public:
     UPROPERTY(EditAnywhere, Category="T00") float DayHoldSeconds = 1.25f;
     UPROPERTY(EditAnywhere, Category="T00") float NightHoldSeconds = 1.25f;
     UPROPERTY(EditAnywhere, Category="T00") float PostMeasureSeconds = 5.f;
+    // Opt-in: existing maps and frozen T00 regression keep their current behavior.
+    UPROPERTY(EditInstanceOnly, Category="P04|Streaming") bool bUsePhaseStreaming = false;
+    UPROPERTY(EditInstanceOnly, Category="P04|Streaming") FName DayStreamingLevel = TEXT("L_YIXI_T00_Day");
+    UPROPERTY(EditInstanceOnly, Category="P04|Streaming") FName NightStreamingLevel = TEXT("L_YIXI_T00_Night");
+    UPROPERTY(EditAnywhere, Category="P04|Streaming", meta=(ClampMin="5")) float StreamingTimeoutSeconds = 30.f;
 private:
     enum class EPhase { Warming, Ready, Day, AwaitCut, Night, AwaitTeleport, Settling, AwaitRestore, Post, Done };
     EPhase Phase = EPhase::Warming;
@@ -128,6 +134,18 @@ private:
     void ReportWaiting(const FString& Reason);
     void Finish(bool bFunctional, const FString& Reason);
     FString PhaseName() const;
+    ULevelStreaming* P04Level(FName Name) const;
+    void RequestP04Night();
+    void TickP04Streaming(double Now);
+    bool P04CutReady() const;
+    bool P04ScenesReady(FString* Reason) const;
+    void ReleaseP04DayReferences();
+    bool bP04Preloading=false, bP04NightReady=false, bP04NightFailed=false;
+    bool bP04PendingConfirm=false, bP04PendingDebug=false, bP04DayUnloadRequested=false, bP04DayUnloaded=false;
+    bool bP04NightFenceStarted=false;
+    int32 P04NightReadyFrames=0;
+    double P04LoadAt=0, P04UnloadAt=0;
+    FRenderCommandFence P04NightFence;
     UFUNCTION() void Teleported(const FVector& FromLocation, const FQuat& FromRotation,
                               const FVector& ToLocation, const FQuat& ToRotation);
 };

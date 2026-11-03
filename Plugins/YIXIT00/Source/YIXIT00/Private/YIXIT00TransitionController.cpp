@@ -105,6 +105,12 @@ void AYIXIT00TransitionController::BeginPlay()
     Result->SetStringField(TEXT("frame_time_scope"), TEXT("Wall-clock interval between post-camera game-thread ticks; NOT GPU timestamps or proof of zero hitch."));
     Event(TEXT("BeginPlay"));
     Event(TEXT("T00_CONTROLLER_BEGINPLAY"));
+    if (bUsePhaseStreaming)
+    {
+        if (auto* Day=P04Level(DayStreamingLevel)) { Day->SetShouldBeLoaded(true); Day->SetShouldBeVisible(true); }
+        if (auto* Night=P04Level(NightStreamingLevel)) { Night->SetShouldBeVisible(false); Night->SetShouldBeLoaded(false); }
+        Event(TEXT("P04_STARTUP_DAY_ONLY_REQUESTED"));
+    }
 }
 FString AYIXIT00TransitionController::PhaseName() const
 {
@@ -113,6 +119,7 @@ FString AYIXIT00TransitionController::PhaseName() const
 }
 bool AYIXIT00TransitionController::ScenesReady(FString* Reason) const
 {
+    if (bUsePhaseStreaming) return P04ScenesReady(Reason);
     const auto& Streams = GetWorld()->GetStreamingLevels();
     if (Streams.Num() != 2 || GetWorld()->IsPartitionedWorld())
     {
@@ -370,6 +377,8 @@ void AYIXIT00TransitionController::TriggerTransition()
     { Event(TEXT("T00_DEBUG_IGNORED_DURING_INTERACTION")); return; }
     if (Phase != EPhase::Ready) { UE_LOG(LogYIXIT00, Display, TEXT("[YIXI_T00] Not ready/already used; wait READY, or restart play for another run.")); return; }
     if (!ScenesReady() || !SamePossession()) { Finish(false,TEXT("Scenes/possession not ready at trigger")); return; }
+    if (bUsePhaseStreaming && !P04CutReady())
+    { bP04PendingDebug=true; RequestP04Night(); return; }
     HoldInput();
     Phase = EPhase::Day; PhaseAt = FPlatformTime::Seconds();
     Event(TEXT("TriggerInputLocked")); HardCut(CameraA); Event(TEXT("DayCloseupRequested"));
@@ -417,6 +426,8 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     const double Now = FPlatformTime::Seconds();
     if (Phase == EPhase::Done) return;
+    if (bUsePhaseStreaming) TickP04Streaming(Now);
+    if (Phase == EPhase::Done) return;
     auto Frame = MakeShared<FJsonObject>();
     Frame->SetNumberField(TEXT("frame"), static_cast<double>(GFrameCounter));
     Frame->SetNumberField(TEXT("t_seconds"), Now-StartedAt);
@@ -436,7 +447,12 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
     {
         FString WaitingReason;
         if (!ScenesReady(&WaitingReason)) { ReportWaiting(WaitingReason); return; }
-        if (!bSublevelsReported) { bSublevelsReported = true; Event(TEXT("T00_SUBLEVELS_READY")); }
+        if (!bSublevelsReported)
+        {
+            bSublevelsReported = true; Event(TEXT("T00_SUBLEVELS_READY"));
+            if (bUsePhaseStreaming)
+            { Result->SetBoolField(TEXT("p04_start_day_loaded_night_unloaded"),true); Event(TEXT("P04_START_DAY_LOADED_NIGHT_UNLOADED")); }
+        }
         if (!TestPawn && !ResolveTestActors()) return;
         if (Phase == EPhase::Done) return;
         if (!bFenceStarted)
@@ -534,6 +550,7 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
     }
     else if (Phase==EPhase::Post && Now-PhaseAt>=PostMeasureSeconds)
     {
+        if (bUsePhaseStreaming && !bP04DayUnloaded) return;
         Result->SetNumberField(TEXT("post_restore_displacement_cm"), FVector::Dist2D(PostStartLocation,TestPawn->GetActorLocation()));
         Finish(true,TEXT("Telemetry complete; manual visual, animation, movement and Standalone acceptance still required"));
     }
@@ -552,6 +569,14 @@ void AYIXIT00TransitionController::Finish(bool bFunctional, const FString& Reaso
     Result->SetStringField(TEXT("manual_acceptance"),TEXT("PENDING: framing, no fly-through, input/animation, PIE then Standalone, GPU/streaming attribution."));
     Result->SetBoolField(TEXT("same_pawn_and_controller"),SamePossession());
     Result->SetBoolField(TEXT("levels_loaded_visible"),ScenesReady());
+    if (bUsePhaseStreaming)
+    {
+        Result->SetBoolField(TEXT("p04_phase_streaming"),true);
+        Result->SetBoolField(TEXT("p04_day_unloaded"),bP04DayUnloaded);
+        auto* Night=P04Level(NightStreamingLevel);
+        Result->SetBoolField(TEXT("p04_night_loaded_visible"),Night && Night->IsLevelLoaded() && Night->IsLevelVisible());
+        Result->SetStringField(TEXT("p04_memory_scope"),TEXT("Process physical memory samples; unloading a level does not immediately evict texture/material/GASP caches"));
+    }
     Result->SetNumberField(TEXT("cut_wall_seconds"),CutAt>0?CutAt-StartedAt:-1);
     Result->SetNumberField(TEXT("restore_wall_seconds"),RestoredAt>0?RestoredAt-StartedAt:-1);
     Result->SetStringField(TEXT("render_readiness_limit"),TEXT("Both views captured >=30 frames and render-thread fence complete. This does not guarantee GPU/PSO/texture residency or a hitch-free first main-view draw."));
