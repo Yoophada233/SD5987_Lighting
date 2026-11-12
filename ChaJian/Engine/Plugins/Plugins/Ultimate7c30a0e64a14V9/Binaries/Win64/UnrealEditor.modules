@@ -1,0 +1,12 @@
+{
+	"BuildId": "55116800",
+	"Modules": 
+	{
+		"AutoSpline": "UnrealEditor-AutoSpline.dll",
+		"AutoSplineEditor": "UnrealEditor-AutoSplineEditor.dll",
+		"MaterialAssignment": "UnrealEditor-MaterialAssignment.dll",
+		"ModularBuilding": "UnrealEditor-ModularBuilding.dll",
+		"ObjectDistribution": "UnrealEditor-ObjectDistribution.dll",
+		"UltimateLevelArtTool": "UnrealEditor-UltimateLevelArtTool.dll"
+	}
+}

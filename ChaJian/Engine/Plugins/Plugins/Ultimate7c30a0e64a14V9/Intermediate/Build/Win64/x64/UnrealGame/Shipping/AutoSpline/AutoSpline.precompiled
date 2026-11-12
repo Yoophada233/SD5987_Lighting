@@ -1,0 +1,7 @@
+{
+	"OutputFiles": [
+		"PCH.AutoSpline.h.obj",
+		"Module.AutoSpline.cpp.obj"
+	],
+	"ToolChainVersion": "14.44.35228"
+}
