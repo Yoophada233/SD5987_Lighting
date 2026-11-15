@@ -51,3 +51,6 @@ id_rsa
 id_ed25519
 
 # Keep *_BuiltData.uasset, ExternalActors/ExternalObjects and required Build assets.
+
+# Local resources excluded after the 100 MB size check.
+/Content/Foliage_Sets/VOL47_PompasGrass/Meshes/SM_PampasGrass_Large_NN_01a.uasset
