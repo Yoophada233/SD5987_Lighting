@@ -89,19 +89,25 @@ void AYIXIInteractFire::BeginPlay()
 	ApplyTemplateAndScale();
 	SetFireOn(bFireOnStart);
 
-	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	if (bEnableKeyInteract)
 	{
-		EnableInput(PC);
-		if (InputComponent)
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 		{
-			InputComponent->BindKey(InteractionKey, IE_Pressed, this, &AYIXIInteractFire::InteractionPressed);
+			EnableInput(PC);
+			if (InputComponent)
+			{
+				InputComponent->BindKey(InteractionKey, IE_Pressed, this, &AYIXIInteractFire::InteractionPressed);
+			}
 		}
 	}
 }
 
 void AYIXIInteractFire::EndPlay(const EEndPlayReason::Type Reason)
 {
-	DisableInput(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
+	if (bEnableKeyInteract)
+	{
+		DisableInput(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
+	}
 	Super::EndPlay(Reason);
 }
 

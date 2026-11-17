@@ -79,6 +79,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Interaction")
 	FKey InteractionKey = EKeys::E;
 
+	/** 允许按键交互；感应火子类默认关掉，只走靠近自动点火。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Interaction")
+	bool bEnableKeyInteract = true;
+
 	/** 开局是否就点着。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Interaction")
 	bool bFireOnStart = false;
