@@ -6,12 +6,12 @@
 
 1. 从内容浏览器拖入 **`/Game/YIXI_GrassSystem/BP_YIXI_GrassArea`**，放到需要覆盖区域的中心。区域保持轴对齐，Actor Scale保持1；覆盖范围用下表参数设置，不缩放Actor。
 2. **不需要手放Wind。** 第一个运行的Area自动建立本世界唯一的`Core/BP_YIXI_GrassWind`，之后的Area共享它。不要再手放重复Wind，也不要同时启用写同一MPC的旧GrassBench入口。
-3. 给GrassArea选择已加载的 **TargetLandscape**，再点击Details中的 **BindLandscape**。它记录`LandscapePath`并清空临时TargetLandscape，避免对子关卡地形留下不可保存的私有硬引用；清空是正常结果，路径不用手填。地形必须有有效碰撞，保留约35°坡度过滤，不修改地形数据。
+3. 将GrassArea中心放在已加载的地形上，在Details点击 **BindLandscape**。按钮按中心位置向下查询实际地形碰撞，绑定成功后输出日志会显示完整地形路径。如需指定另一块地形，先选择 **TargetLandscape** 再点击按钮，手动选择优先。`LandscapePath`保存绑定，临时选择随后清空。未探测到地形时会保留已有绑定并提示原因。
 4. 将 **RVTVolume** 指向已有、实际覆盖草区的Volume。设置参数并仅保存明确修改的Actor；进入游戏/PIE后`AutoGenerate`自行生成并管理Tile，不需要MCP持续驱动。使用子关卡地形时，进入游戏前必须让该地形实际加载；模块不负责加载场景。
 
 | GrassArea参数 | 默认值与用途 |
 |---|---|
-| `TargetLandscape` / `LandscapePath` | 选地形后点BindLandscape保存软路径；目标地形必须已加载 |
+| `TargetLandscape` / `LandscapePath` | `BindLandscape`优先使用手动选择，否则按草区中心探测地形碰撞，并保存实际命中的地形软路径 |
 | `RVTVolume` | 指定已有RVT Volume，模块检查草区是否在其XY覆盖内 |
 | `TilesX` / `TilesY` | 主入口默认2 / 2；当前双区示例各1 / 1。配置允许每区总数1–64，不代表已作全范围性能验收 |
 | `TileSizeCm` | 3200；覆盖尺寸=格数×格距，与模型Scale分开 |
