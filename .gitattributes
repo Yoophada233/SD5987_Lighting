@@ -3,7 +3,6 @@
 *.umap binary -filter
 *.ubulk binary -filter
 *.uexp binary -filter
-
 # Ordinary source/config/documentation files remain in normal Git.
 *.cpp text
 *.h text
@@ -12,3 +11,4 @@
 *.md text
 *.uproject text
 *.uplugin text
+Content/Characters/Guard/Textures/Guard/T_Guard_Head_SRMF.uasset filter=lfs diff=lfs merge=lfs -text
