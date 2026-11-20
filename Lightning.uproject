@@ -124,6 +124,23 @@
 		{
 			"Name": "NiagaraFluids",
 			"Enabled": true
+		},
+		{
+			"Name": "CinematicAssemblyTools",
+			"Enabled": true
+		},
+		{
+			"Name": "SequencerAnimMixerToolset",
+			"Enabled": true
+		},
+		{
+			"Name": "Avalanche",
+			"Enabled": true,
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Linux",
+				"Mac"
+			]
 		}
 	]
 }
