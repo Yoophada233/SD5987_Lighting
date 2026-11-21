@@ -6,12 +6,14 @@
 #include "YIXIInteractionStoryCoordinator.generated.h"
 
 class APawn;
+class UBoxComponent;
 class AYIXIAudioTriggerBox;
 class AYIXIDoubleDoor;
 class AYIXIScriptedRock;
 class AYIXIStoryGirl;
 class AYIXIStoryToyPickup;
 class AYIXIStoryTriggerBox;
+class AYIXIV3Cinematic;
 
 UENUM(BlueprintType)
 enum class EYIXIInteractionStoryStage : uint8
@@ -28,7 +30,9 @@ enum class EYIXIInteractionStoryStage : uint8
 	Discovery,
 	MatchCut,
 	Completed,
-	Stopped
+	Stopped,
+	V3Presentation,
+	V3NightPresentation
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FYIXIInteractionStoryStageChanged, EYIXIInteractionStoryStage, Stage);
@@ -75,6 +79,10 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Story|Actors")
 	TObjectPtr<AActor> GirlAftermath;
 
+	/** Optional presentation for the return attack, discovery and match cut. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Story|Cinematic")
+	TObjectPtr<AYIXIV3Cinematic> V3Cinematic;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Story", meta = (ClampMin = "0", Units = "s"))
 	float RoadLaunchDelay = 0.65f;
 
@@ -108,6 +116,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "YIXI|Story|Match Cut")
 	bool CompleteMatchCut(int32 RequestId, bool bSucceeded);
 
+	/** Called by the active presentation on the cut frame after its landing, hold and readiness checks. */
+	int32 RequestV3Cut(APawn* Pawn, AActor* DroppedToy);
+	void FinishV3Presentation(APawn* Pawn);
+	void AbortV3Presentation(APawn* Pawn);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -131,7 +144,18 @@ private:
 	void HandleAttackImpact(int32 RequestId);
 	UFUNCTION()
 	void HandleDiscoveryEntered(APawn* Pawn);
+	void TryPendingFixedStage();
+	void BeginV3Presentation(APawn* Pawn);
+	UFUNCTION()
+	void HandleDiscoveryExited(APawn* Pawn);
+	UFUNCTION()
+	void HandleFixedStageEntered(UPrimitiveComponent* Component, AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& Sweep);
+	UFUNCTION()
+	void HandleFixedStageExited(UPrimitiveComponent* Component, AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex);
 
+	UBoxComponent* GetFixedStageTrigger() const;
 	void CheckInitialDoorState();
 	void LaunchRoadCue();
 	void SetStage(EYIXIInteractionStoryStage NewStage);
@@ -139,13 +163,18 @@ private:
 	bool IsLocalPlayer(const APawn* Pawn) const;
 	bool IsParticipant(const APawn* Pawn) const;
 	void ShowDialogue(APawn* Pawn, const FText& Line);
-	void StartMatchCut(APawn* Pawn, AActor* DroppedToy);
+	int32 StartMatchCut(APawn* Pawn, AActor* DroppedToy);
 
 	TWeakObjectPtr<APawn> StoryPawn;
+	TWeakObjectPtr<AActor> PresentationToy;
+	TWeakObjectPtr<AActor> PendingToy;
 	FTimerHandle RoadCueTimer;
 	FTimerHandle MatchCutTimeoutTimer;
+	FTimerHandle FixedStageRetryTimer;
 	FTimerHandle StandInTimer;
 	int32 NextRequestId = 0;
 	int32 PendingMatchCut = 0;
 	bool bEndingPlay = false;
+	bool bUsesV3Presentation = false;
+	bool bRequiresDiscoveryExit = false;
 };

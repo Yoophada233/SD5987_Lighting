@@ -47,6 +47,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Interaction")
 	TObjectPtr<USceneComponent> CenterInteractionAnchor;
 
+	/** Editable adjustment to the fixed center of the frame. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Interaction")
+	TObjectPtr<USceneComponent> InteractionAnchor;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Components")
 	TObjectPtr<USceneComponent> SoundOrigin;
 

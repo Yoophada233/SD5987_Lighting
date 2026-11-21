@@ -25,11 +25,20 @@ namespace
 	{
 		return FCollisionShape::MakeBox((Bounds.BoxExtent * Scale.GetAbs()).ComponentMax(FVector(0.5)));
 	}
+
+	bool PlaceDetachedToy(AStaticMeshActor& Toy, const FTransform& Pose)
+	{
+		// MoveComponent reports whether it changed a transform. A sub-tolerance curve step can be a valid no-op.
+		Toy.SetActorLocationAndRotation(Pose.GetLocation(), Pose.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		return Toy.GetActorLocation().Equals(Pose.GetLocation(), UE_KINDA_SMALL_NUMBER)
+			&& Toy.GetActorQuat().Equals(Pose.GetRotation(), UE_KINDA_SMALL_NUMBER);
+	}
 }
 
 UYIXIToyCarryComponent::UYIXIToyCarryComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
 	FallbackHandRelativeTransform = FTransform(FVector(38.0, 28.0, 5.0));
 	FallbackWaistRelativeTransform = FTransform(FVector(-24.0, 0.0, -24.0));
 }
@@ -203,9 +212,23 @@ bool UYIXIToyCarryComponent::TryPickup(APawn* Pawn, AYIXIStoryToyPickup& Pickup)
 bool UYIXIToyCarryComponent::TryDrop()
 {
 	APawn* Pawn = GetControlledPawn();
+	if (!IsValid(Pawn))
+	{
+		return false;
+	}
+	const FQuat Rotation = FRotator(0.0, Pawn->GetActorRotation().Yaw, 0.0).Quaternion();
+	const FTransform GroundAnchor(Rotation, Pawn->GetActorLocation() + Rotation.RotateVector(DropOffset));
+	FTransform LandingPose;
+	return FindCinematicDropPose(GroundAnchor, LandingPose) && TryDropAt(LandingPose);
+}
+
+bool UYIXIToyCarryComponent::FindCinematicDropPose(const FTransform& GroundAnchor, FTransform& OutPose) const
+{
+	APawn* Pawn = GetControlledPawn();
 	UWorld* World = GetWorld();
-	if (bEndingPlay || CarryState != EYIXIToyCarryState::HeldHand || !World || !IsValid(Pawn)
-		|| CarrierPawn.Get() != Pawn || !GetToyActor())
+	if (bEndingPlay || (CarryState != EYIXIToyCarryState::HeldHand && CarryState != EYIXIToyCarryState::Falling)
+		|| !World || !IsValid(Pawn)
+		|| CarrierPawn.Get() != Pawn || !GetToyActor() || !GroundAnchor.IsValid())
 	{
 		return false;
 	}
@@ -217,9 +240,9 @@ bool UYIXIToyCarryComponent::TryDrop()
 	}
 
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	const FQuat DropRotation = FRotator(0.0, Pawn->GetActorRotation().Yaw, 0.0).Quaternion();
+	const FQuat DropRotation = GroundAnchor.GetRotation();
 	const FVector BoundsOffset = DropRotation.RotateVector(Bounds.Origin * ToyActor->GetActorScale3D());
-	const FVector DropCenter = Pawn->GetActorLocation() + DropRotation.RotateVector(DropOffset) + BoundsOffset;
+	const FVector DropCenter = GroundAnchor.GetLocation() + BoundsOffset;
 	const FVector Start = DropCenter + FVector(0.0, 0.0, 70.0);
 	const FVector End = DropCenter - FVector(0.0, 0.0, FMath::Max(1.0f, DropGroundSearchDistance));
 
@@ -232,15 +255,14 @@ bool UYIXIToyCarryComponent::TryDrop()
 	}
 
 	const FVector DropLocation = Floor.Location - BoundsOffset + FVector(0.0, 0.0, 1.0);
-	return TryDropAt(FTransform(DropRotation, DropLocation));
+	OutPose = FTransform(DropRotation, DropLocation, ToyActor->GetActorScale3D());
+	return IsDropPathClear(*Pawn, OutPose);
 }
 
-bool UYIXIToyCarryComponent::TryDropAt(const FTransform& WorldPose)
+bool UYIXIToyCarryComponent::IsDropPathClear(const APawn& Pawn, const FTransform& WorldPose) const
 {
-	APawn* Pawn = GetControlledPawn();
 	UWorld* World = GetWorld();
-	if (bEndingPlay || CarryState != EYIXIToyCarryState::HeldHand || !World || !IsValid(Pawn)
-		|| CarrierPawn.Get() != Pawn || !GetToyActor() || !WorldPose.IsValid())
+	if (!World || !GetToyActor() || !WorldPose.IsValid())
 	{
 		return false;
 	}
@@ -257,15 +279,36 @@ bool UYIXIToyCarryComponent::TryDropAt(const FTransform& WorldPose)
 	const FVector CurrentCenter = ToyActor->GetActorTransform().TransformPosition(Bounds.Origin);
 	const FVector DropCenter = WorldPose.GetLocation() + Rotation.RotateVector(Bounds.Origin * ToyScale);
 	const FCollisionShape Shape = MakeDropShape(Bounds, ToyScale);
-	const FCollisionQueryParams Query = MakeDropQuery(*Pawn, *ToyActor);
-	if (World->OverlapBlockingTestByChannel(DropCenter, Rotation, DropTraceChannel, Shape, Query)
-		|| World->SweepTestByChannel(CurrentCenter, DropCenter, Rotation, DropTraceChannel, Shape, Query))
+	const FCollisionQueryParams Query = MakeDropQuery(Pawn, *ToyActor);
+	if (World->OverlapBlockingTestByChannel(DropCenter, Rotation, DropTraceChannel, Shape, Query))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YIXI toy destination occupied at %s"), *DropCenter.ToString());
+		return false;
+	}
+	if (!CurrentCenter.Equals(DropCenter, UE_KINDA_SMALL_NUMBER))
+	{
+		FHitResult Hit;
+		if (World->SweepSingleByChannel(Hit, CurrentCenter, DropCenter, Rotation, DropTraceChannel, Shape, Query))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("YIXI toy remaining path blocked by %s / %s, distance %.4fcm"),
+				*GetNameSafe(Hit.GetActor()), *GetNameSafe(Hit.GetComponent()), Hit.Distance);
+			return false;
+		}
+	}
+	return true;
+}
+
+bool UYIXIToyCarryComponent::TryDropAt(const FTransform& WorldPose)
+{
+	APawn* Pawn = GetControlledPawn();
+	if (bEndingPlay || CarryState != EYIXIToyCarryState::HeldHand || !IsValid(Pawn)
+		|| CarrierPawn.Get() != Pawn || !IsDropPathClear(*Pawn, WorldPose))
 	{
 		return false;
 	}
 
 	// Check placement and move before detaching so rejects leave the hand attachment intact.
-	if (!ToyActor->SetActorLocationAndRotation(WorldPose.GetLocation(), Rotation, false, nullptr, ETeleportType::TeleportPhysics))
+	if (!ToyActor->SetActorLocationAndRotation(WorldPose.GetLocation(), WorldPose.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics))
 	{
 		return false;
 	}
@@ -276,11 +319,199 @@ bool UYIXIToyCarryComponent::TryDropAt(const FTransform& WorldPose)
 	return true;
 }
 
+bool UYIXIToyCarryComponent::BeginCinematicDrop(const FTransform& LandingPose, float Duration)
+{
+	return StartVerticalDrop(LandingPose, Duration, false);
+}
+
+bool UYIXIToyCarryComponent::BeginSequencedVerticalDrop(const FTransform& LandingPose, float Duration)
+{
+	return StartVerticalDrop(LandingPose, Duration, true);
+}
+
+bool UYIXIToyCarryComponent::FindVerticalCinematicLanding(FTransform& OutPose) const
+{
+	const APawn* Pawn = GetControlledPawn();
+	return !bEndingPlay && CarryState == EYIXIToyCarryState::HeldHand && IsValid(Pawn)
+		&& CarrierPawn.Get() == Pawn && GetToyActor() && ProjectBelowToy(*Pawn, ToyActor->GetActorTransform(), OutPose)
+		&& IsDropPathClear(*Pawn, OutPose);
+}
+
+bool UYIXIToyCarryComponent::ProjectBelowToy(const APawn& Pawn, const FTransform& ReleasePose, FTransform& OutPose) const
+{
+	const UStaticMesh* Mesh = ToyActor->GetStaticMeshComponent()->GetStaticMesh();
+	if (!Mesh || !ReleasePose.IsValid() || DropGroundSearchDistance <= 0.0f)
+	{
+		return false;
+	}
+	const FBoxSphereBounds Bounds = Mesh->GetBounds();
+	const FVector Center = ReleasePose.TransformPosition(Bounds.Origin);
+	const FVector Below = Center - FVector(0, 0, DropGroundSearchDistance);
+	FHitResult Hit;
+	if (!GetWorld()->SweepSingleByChannel(Hit, Center, Below, ReleasePose.GetRotation(), DropTraceChannel,
+		MakeDropShape(Bounds, ReleasePose.GetScale3D()), MakeDropQuery(Pawn, *ToyActor))
+		|| Hit.bStartPenetrating || Hit.ImpactNormal.Z < 0.5 || Hit.Distance <= 0.4)
+	{
+		return false;
+	}
+	// Hit.Distance is the downward travel of the oriented mesh bounds, including signed pivot offset.
+	OutPose = ReleasePose;
+	OutPose.AddToTranslation(FVector(0, 0, -(Hit.Distance - 0.4)));
+	return true;
+}
+
+bool UYIXIToyCarryComponent::StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence)
+{
+	FTransform GroundPose;
+	if (!FMath::IsFinite(Duration) || Duration <= 0.0f || !FindVerticalCinematicLanding(GroundPose)
+		|| !GroundPose.GetLocation().Equals(LandingPose.GetLocation(), 2.0)
+		|| ToyActor->GetStaticMeshComponent()->IsSimulatingPhysics())
+	{
+		return false;
+	}
+
+	APawn* Pawn = GetControlledPawn();
+	USceneComponent* Root = ToyActor->GetRootComponent();
+	if (!Root->GetAttachParent() || Root->GetAttachParent()->GetOwner() != Pawn)
+	{
+		return false;
+	}
+	ReleaseParent = Root->GetAttachParent();
+	ReleaseSocket = Root->GetAttachSocketName();
+	ReleaseRelativePose = Root->GetRelativeTransform();
+	DropStartPose = ToyActor->GetActorTransform();
+	DropEndPose = GroundPose;
+	DropDuration = Duration;
+	DropElapsed = 0.0f;
+	DropProgress = 0.0f;
+	bSequenceControlsDrop = bFromSequence;
+	CinematicDropPawn = Pawn;
+	ToyActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	SetComponentTickEnabled(!bFromSequence);
+	SetCarryState(Pawn, EYIXIToyCarryState::Falling);
+	return CarryState == EYIXIToyCarryState::Falling || CarryState == EYIXIToyCarryState::Dropped;
+}
+
+void UYIXIToyCarryComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	APawn* Pawn = GetControlledPawn();
+	if (bSequenceControlsDrop || CarryState != EYIXIToyCarryState::Falling || !IsValid(Pawn) || CinematicDropPawn.Get() != Pawn || !GetToyActor())
+	{
+		SetComponentTickEnabled(false);
+		return;
+	}
+
+	DropElapsed += DeltaTime;
+	const float Alpha = FMath::Clamp(DropElapsed / DropDuration, 0.0f, 1.0f);
+	if (!MoveVerticalDrop(Alpha >= 1.0f ? 1.0f : Alpha * Alpha))
+	{
+		SetComponentTickEnabled(false);
+		RestoreToyToHand();
+	}
+}
+
+bool UYIXIToyCarryComponent::ApplySequencedDropProgress(float Alpha)
+{
+	return bSequenceControlsDrop && MoveVerticalDrop(Alpha);
+}
+
+bool UYIXIToyCarryComponent::MoveVerticalDrop(float Alpha)
+{
+	const APawn* Pawn = GetControlledPawn();
+	if (bEndingPlay || CarryState != EYIXIToyCarryState::Falling || !IsValid(Pawn) || CinematicDropPawn.Get() != Pawn
+		|| !GetToyActor() || ToyActor->GetAttachParentActor() || !FMath::IsFinite(Alpha))
+	{
+		return false;
+	}
+	DropProgress = FMath::Clamp(Alpha, DropProgress, 1.0f);
+	if (DropProgress >= 1.0f) return FinishCinematicDrop();
+	FTransform Pose = DropStartPose;
+	FVector Position = Pose.GetLocation();
+	Position.Z = FMath::Lerp(Position.Z, DropEndPose.GetLocation().Z, DropProgress);
+	Pose.SetLocation(Position);
+	return IsDropPathClear(*Pawn, Pose) && PlaceDetachedToy(*ToyActor, Pose);
+}
+
+bool UYIXIToyCarryComponent::FinishCinematicDrop()
+{
+	APawn* Pawn = GetControlledPawn();
+	if (bEndingPlay || CarryState != EYIXIToyCarryState::Falling || !IsValid(Pawn)
+		|| CinematicDropPawn.Get() != Pawn || !GetToyActor() || ToyActor->GetAttachParentActor())
+	{
+		return false;
+	}
+	// Validate the remaining segment (also covers a skip), then recheck the surface just below the endpoint.
+	// A new object behind the descending toy no longer obstructs it.
+	FTransform FloorProbe = DropEndPose;
+	FloorProbe.AddToTranslation(FVector(0, 0, 3.0));
+	FTransform FloorPose;
+	if (!IsDropPathClear(*Pawn, DropEndPose)) return false;
+	if (!ProjectBelowToy(*Pawn, FloorProbe, FloorPose) || !FloorPose.GetLocation().Equals(DropEndPose.GetLocation(), 0.25))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YIXI toy lost support at %s"), *DropEndPose.GetLocation().ToString());
+		return false;
+	}
+	if (!PlaceDetachedToy(*ToyActor, DropEndPose))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YIXI toy endpoint transform not reached at %s"), *DropEndPose.GetLocation().ToString());
+		return false;
+	}
+
+	SetComponentTickEnabled(false);
+	CarrierPawn.Reset();
+	SetCarryState(Pawn, EYIXIToyCarryState::Dropped);
+	return CarryState == EYIXIToyCarryState::Dropped && GetToyActor();
+}
+
+bool UYIXIToyCarryComponent::RestoreReleaseAttachment(APawn& Pawn)
+{
+	USceneComponent* Parent = ReleaseParent.Get();
+	if (!IsValid(Parent) || !Parent->IsRegistered() || Parent->GetOwner() != &Pawn
+		|| (!ReleaseSocket.IsNone() && !Parent->DoesSocketExist(ReleaseSocket))
+		|| !ToyActor->AttachToComponent(Parent, FAttachmentTransformRules::KeepWorldTransform, ReleaseSocket))
+	{
+		return false;
+	}
+	ToyActor->GetRootComponent()->SetRelativeTransform(ReleaseRelativePose);
+	return true;
+}
+
+bool UYIXIToyCarryComponent::RestoreToyToHand()
+{
+	APawn* Pawn = GetControlledPawn();
+	if (bEndingPlay || !IsValid(Pawn) || !Pawn->IsPlayerControlled() || CinematicDropPawn.Get() != Pawn || !GetToyActor()
+		|| (CarryState != EYIXIToyCarryState::Falling && CarryState != EYIXIToyCarryState::Dropped))
+	{
+		return false;
+	}
+	FAttachment Hand;
+	if (!RestoreReleaseAttachment(*Pawn) && (!FindAttachment(*Pawn, false, Hand) || !AttachToy(*ToyActor, Hand, ToyBaseScale)))
+	{
+		return false;
+	}
+	SetComponentTickEnabled(false);
+	CarrierPawn = Pawn;
+	CinematicDropPawn.Reset();
+	SetCarryState(Pawn, EYIXIToyCarryState::HeldHand);
+	return CarryState == EYIXIToyCarryState::HeldHand && GetToyActor();
+}
+
+bool UYIXIToyCarryComponent::CanAttachToWaist() const
+{
+	APawn* Pawn = GetControlledPawn();
+	FAttachment Attachment;
+	return !bEndingPlay && IsValid(Pawn) && Pawn->IsPlayerControlled() && Pawn->GetWorld() == GetWorld()
+		&& (CinematicDropPawn.IsExplicitlyNull() || CinematicDropPawn.Get() == Pawn)
+		&& GetToyActor() && FindAttachment(*Pawn, true, Attachment);
+}
+
 bool UYIXIToyCarryComponent::TryAttachToWaist()
 {
 	APawn* Pawn = GetControlledPawn();
 	if (bEndingPlay || CarryState != EYIXIToyCarryState::Dropped
-		|| !IsValid(Pawn) || !Pawn->IsPlayerControlled() || Pawn->GetWorld() != GetWorld() || !GetToyActor())
+		|| !IsValid(Pawn) || !Pawn->IsPlayerControlled() || Pawn->GetWorld() != GetWorld() || !GetToyActor()
+		|| (!CinematicDropPawn.IsExplicitlyNull() && CinematicDropPawn.Get() != Pawn))
 	{
 		return false;
 	}
@@ -292,6 +523,7 @@ bool UYIXIToyCarryComponent::TryAttachToWaist()
 	}
 
 	CarrierPawn = Pawn;
+	CinematicDropPawn.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::AttachedAtWaist);
 	return true;
 }
@@ -308,6 +540,22 @@ void UYIXIToyCarryComponent::SetCarryState(APawn* Pawn, EYIXIToyCarryState NewSt
 
 void UYIXIToyCarryComponent::HandlePawnChanged(APawn* PreviousPawn, APawn* NewPawn)
 {
+	if (!bEndingPlay && CarryState == EYIXIToyCarryState::Falling && GetToyActor())
+	{
+		SetComponentTickEnabled(!bSequenceControlsDrop && IsValid(NewPawn) && CinematicDropPawn.Get() == NewPawn);
+		if (IsValid(PreviousPawn) && PreviousPawn != NewPawn && CinematicDropPawn.Get() == PreviousPawn)
+		{
+			// Restore the prop to the original carrier before their cinematic is interrupted.
+			FAttachment Hand;
+			if (RestoreReleaseAttachment(*PreviousPawn)
+				|| (FindAttachment(*PreviousPawn, false, Hand) && AttachToy(*ToyActor, Hand, ToyBaseScale)))
+			{
+				CinematicDropPawn.Reset();
+				SetCarryState(PreviousPawn, EYIXIToyCarryState::HeldHand);
+			}
+		}
+		return;
+	}
 	const bool bAttached = CarryState == EYIXIToyCarryState::HeldHand || CarryState == EYIXIToyCarryState::AttachedAtWaist;
 	if (!bEndingPlay && bAttached && GetToyActor() && (!CarrierPawn.IsValid() || CarrierPawn.Get() != NewPawn))
 	{
@@ -321,6 +569,8 @@ void UYIXIToyCarryComponent::HandleToyDestroyed(AActor* DestroyedActor)
 {
 	if (!bEndingPlay && ToyActor.Get() == DestroyedActor)
 	{
+		SetComponentTickEnabled(false);
+		CinematicDropPawn.Reset();
 		ToyActor = nullptr;
 		CarrierPawn.Reset();
 		SetCarryState(GetControlledPawn(), EYIXIToyCarryState::Grounded);

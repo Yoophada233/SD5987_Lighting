@@ -80,6 +80,8 @@ AYIXIDoubleDoor::AYIXIDoubleDoor()
 
 	CenterInteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("CenterInteractionAnchor"));
 	CenterInteractionAnchor->SetupAttachment(DoorFrameRoot);
+	InteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("InteractionAnchor"));
+	InteractionAnchor->SetupAttachment(CenterInteractionAnchor);
 	SoundOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("SoundOrigin"));
 	SoundOrigin->SetupAttachment(DoorFrameRoot);
 
@@ -129,7 +131,7 @@ void AYIXIDoubleDoor::ResetMotion()
 FYIXIInteractionPrompt AYIXIDoubleDoor::GetInteractionPrompt_Implementation(APawn* Interactor) const
 {
 	FYIXIInteractionPrompt Prompt;
-	Prompt.WorldLocation = CenterInteractionAnchor->GetComponentLocation();
+	Prompt.WorldLocation = InteractionAnchor->GetComponentLocation();
 	if (DoorState == EYIXIDoorState::Open && !bCanClose)
 	{
 		// Remove a permanently open door from target selection as well as the HUD.

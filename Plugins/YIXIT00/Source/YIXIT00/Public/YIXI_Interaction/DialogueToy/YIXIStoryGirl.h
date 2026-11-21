@@ -5,7 +5,10 @@
 #include "YIXI_Interaction/YIXIInteractable.h"
 #include "YIXIStoryGirl.generated.h"
 
+class UAudioComponent;
 class USceneComponent;
+class USoundAttenuation;
+class USoundBase;
 class UStaticMeshComponent;
 
 UENUM(BlueprintType)
@@ -33,8 +36,25 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Story|Components")
 	TObjectPtr<USceneComponent> InteractionAnchor;
 
+	/** Move this audio component to place the girl's voice independently of the prompt. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Story|Voice")
+	TObjectPtr<UAudioComponent> VoiceAnchor;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Dialogue")
 	FText RequestDialogue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Voice")
+	TObjectPtr<USoundBase> RequestVoice;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Voice")
+	TObjectPtr<USoundBase> ReminderVoice;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Voice", meta = (ClampMin = "0"))
+	float VoiceVolume = 1.0f;
+
+	/** When empty, the voice uses the component's default spatial attenuation. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Voice")
+	TObjectPtr<USoundAttenuation> VoiceAttenuation;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Interaction", meta = (ClampMin = "0", Units = "cm"))
 	float DetectionRange = 300.0f;
@@ -69,6 +89,9 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	bool HasAvailableDialogue() const;
+	void PlayVoice(USoundBase* Sound);
+
 	UPROPERTY(VisibleInstanceOnly, Category = "Story|Dialogue")
 	EYIXIStoryGirlState RequestState = EYIXIStoryGirlState::Waiting;
 	bool bRequestGateSet = false;

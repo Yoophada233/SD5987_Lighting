@@ -183,6 +183,18 @@ void UYIXIInteractorComponent::OnInteractionPressed()
 	RequestInteract();
 }
 
+void UYIXIInteractorComponent::SetCinematicSuppressed(bool bSuppressed)
+{
+	if (bCinematicSuppressed == bSuppressed)
+	{
+		return;
+	}
+	bCinematicSuppressed = bSuppressed;
+	ApplyTarget(FTarget(), 0.0f);
+	TimeUntilCandidateRefresh = 0.0f;
+	TimeUntilScan = 0.0f;
+}
+
 void UYIXIInteractorComponent::RefreshCandidates()
 {
 	Candidates.Reset();
@@ -288,7 +300,8 @@ void UYIXIInteractorComponent::ApplyTarget(const FTarget& Target, float DeltaTim
 bool UYIXIInteractorComponent::RequestInteract()
 {
 	APlayerController* Controller = ResolveLocalController();
-	if (!Controller || Controller != ActiveController.Get() || !IsValid(CurrentTarget) || LastRequestFrame == GFrameCounter)
+	if (bCinematicSuppressed || !Controller || Controller != ActiveController.Get()
+		|| !IsValid(CurrentTarget) || LastRequestFrame == GFrameCounter)
 	{
 		return false;
 	}
@@ -314,7 +327,7 @@ void UYIXIInteractorComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		ResetLocalPlayer();
 		ActiveController = Controller;
 	}
-	if (!Controller)
+	if (!Controller || bCinematicSuppressed)
 	{
 		return;
 	}

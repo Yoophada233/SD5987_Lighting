@@ -4,9 +4,11 @@
 #include "GameFramework/Actor.h"
 #include "YIXIScriptedRock.generated.h"
 
+class UAudioComponent;
 class UBoxComponent;
 class UCurveFloat;
 class USceneComponent;
+class USoundAttenuation;
 class USoundBase;
 class UStaticMeshComponent;
 
@@ -75,8 +77,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
 	TObjectPtr<USoundBase> LaunchSound;
 
+	/** Optional moving source on the visible rock, active only during flight. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
+	TObjectPtr<UAudioComponent> FlightAudio;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
+	TObjectPtr<USoundBase> FlightSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio", meta = (ClampMin = "0"))
+	float FlightVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
+	TObjectPtr<USoundAttenuation> FlightAttenuation;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
+	TObjectPtr<UAudioComponent> ImpactAudio;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
 	TObjectPtr<USoundBase> ImpactSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio", meta = (ClampMin = "0"))
+	float ImpactVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
+	TObjectPtr<USoundAttenuation> ImpactAttenuation;
 
 	UPROPERTY(BlueprintAssignable, Category = "YIXI|Events")
 	FYIXIScriptedRockEvent OnLaunched;
@@ -92,6 +116,7 @@ public:
 
 protected:
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	float EvaluateVerticalShape(float Alpha) const;

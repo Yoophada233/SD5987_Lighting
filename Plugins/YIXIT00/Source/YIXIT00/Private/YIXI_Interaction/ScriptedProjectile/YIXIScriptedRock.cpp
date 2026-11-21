@@ -2,6 +2,7 @@
 
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "Components/AudioComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -9,8 +10,34 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
+#include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	void PrepareSpatialCue(UAudioComponent& Audio, USceneComponent* Parent)
+	{
+		Audio.SetupAttachment(Parent);
+		Audio.SetAutoActivate(false);
+		Audio.bAllowSpatialization = true;
+		Audio.bOverrideAttenuation = true;
+		Audio.AttenuationOverrides.bAttenuate = true;
+		Audio.AttenuationOverrides.bSpatialize = true;
+	}
+
+	void PlaySpatialCue(UAudioComponent& Audio, USoundBase* Sound, float Volume, USoundAttenuation* Attenuation)
+	{
+		if (IsValid(Sound) && Volume > 0.0f)
+		{
+			Audio.AttenuationSettings = Attenuation;
+			Audio.bOverrideAttenuation = !IsValid(Attenuation);
+			Audio.SetVolumeMultiplier(Volume);
+			Audio.SetSound(Sound);
+			Audio.Play();
+		}
+	}
+}
 
 AYIXIScriptedRock::AYIXIScriptedRock()
 {
@@ -39,6 +66,11 @@ AYIXIScriptedRock::AYIXIScriptedRock()
 		TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	RockMesh->SetStaticMesh(DefaultRock.Object);
 	RockMesh->SetRelativeScale3D(FVector(2.4, 1.3, 2.0));
+
+	FlightAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("FlightAudio"));
+	PrepareSpatialCue(*FlightAudio, RockMesh);
+	ImpactAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("ImpactAudio"));
+	PrepareSpatialCue(*ImpactAudio, SceneRoot);
 
 	Blocker = CreateDefaultSubobject<UBoxComponent>(TEXT("Blocker"));
 	Blocker->SetupAttachment(ImpactAnchor);
@@ -99,6 +131,7 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 	{
 		UGameplayStatics::PlaySoundAtLocation(this, LaunchSound, LaunchPose.GetLocation());
 	}
+	PlaySpatialCue(*FlightAudio, FlightSound, FlightVolume, FlightAttenuation);
 	OnLaunched.Broadcast(ActiveRequestId);
 	return true;
 }
@@ -169,10 +202,9 @@ void AYIXIScriptedRock::FinishTravel()
 		Blocker->SetWorldTransform(LandingBlockerPose);
 	}
 
-	if (ImpactSound)
-	{
-		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, LandingPose.GetLocation());
-	}
+	FlightAudio->Stop();
+	ImpactAudio->SetWorldLocation(LandingPose.GetLocation());
+	PlaySpatialCue(*ImpactAudio, ImpactSound, ImpactVolume, ImpactAttenuation);
 
 	// Consumers see the landed pose before clearance can fire its separate event.
 	OnImpact.Broadcast(ActiveRequestId);
@@ -180,6 +212,13 @@ void AYIXIScriptedRock::FinishTravel()
 	{
 		TryEnableBlockage();
 	}
+}
+
+void AYIXIScriptedRock::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	FlightAudio->Stop();
+	ImpactAudio->Stop();
+	Super::EndPlay(EndPlayReason);
 }
 
 void AYIXIScriptedRock::TryEnableBlockage()

@@ -21,9 +21,9 @@
 ## 双开门中央锚点 · `B-DD-01`
 
 - `BP_YIXI_DoubleDoor` 以整门 Actor 实现一次交互接口。门框和两扇门组件归属同一 Actor。一次 E 请求提交给整门，左右门扇按同一个开关状态同步动作。
-- 新增可在 Details 调整的 `CenterInteractionAnchor`。锚点默认固定在门框上，位于两扇门中央、接近把手高度。左右门扇转动期间，锚点保持在门框坐标系下。`GetInteractionPrompt` 从该组件返回正反两侧共用的世界位置。
+- 选择 `CenterInteractionAnchor` 下的 `InteractionAnchor` 直接拖动提示点。父组件继续使用原中心偏移。默认位置在门框中央、接近把手高度，左右门扇转动时位置固定。`GetInteractionPrompt` 返回正反两侧共用的子锚点世界位置。
 - 正反两侧使用相同的范围与遮挡规则。现有可见性检测接受首先命中目标 Actor 自身的射线，关闭的自有门扇可以参与正常选中。门外的墙体等遮挡物仍按公共规则处理。
-- 开关过程中仍由同一个目标更新同一个提示。同场有多个双门，或者双门与单门相邻时，每个本地玩家仍只显示当前目标的提示。原单开门继续使用随门扇运动的 `HandleMarker`。
+- 开关过程中仍由同一个目标更新同一个提示。同场有多个双门，或者双门与单门相邻时，每个本地玩家仍只显示当前目标的提示。原单门的 `InteractionAnchor` 跟随 `HandleMarker` 和门扇，继续应用现有的提示偏移。
 
 ## 任务卡继承与审核
 
@@ -58,3 +58,9 @@
 | NPC 与玩具 | `OnToyRequested(Pawn)` 开放指定拾取物。`OnToyPickedUp(Pawn)` 表示手部挂接已成功。玩家 Carry Component 引用同一个玩具，提供 `TryDrop`、`TryAttachToWaist` 及状态事件。对白通过剧情委托展示。 |
 | 场景触发器 | `OnPlayerEntered`、`OnPlayerExited` 以受控 Pawn 为单位，`ContainsPawn` 用于阶段切换时补查已有重叠。 |
 | Match Cut | `OnMatchCutRequested(RequestId, Pawn, DroppedToy)` 暴露已落地的同一个道具。对应的 `CompleteMatchCut(RequestId, bSucceeded)` 验证当前请求、同一受控 Pawn 及后腰挂接结果。失败保留恢复入口。隔离替身按延时返回结果，正式转场接口接入另行授权。 |
+
+### V3 镜头与剧情交接
+
+沙盒协调器通过实例引用 `V3Cinematic` 选择正式请求的发出时机。拾取玩具后准备夜景，返程撞击后女孩从现场消失。发现区域将相机、移动和交互提示交给演出。玩具由原 Carry 组件从手上释放。落稳且机位稳定以后，正常播放保持 5.0 秒，再以同一 Pawn、同一玩具和有效 RequestId 请求挂到后腰。成功后立即硬切。夜景展开结束时交回相机、角色输入和 HUD。空格跳过可缩短停留，仍需完成掉落、挂接及夜景首镜。
+
+夜景在持久白盒中提前准备。独立混响总线和夜声由演出实例持有。正式流送接入时，演出及跨切音频应位于不会随白天子关卡一起卸载的宿主。现有地图没有配置演出实例时仍使用原交互流程。

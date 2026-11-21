@@ -141,6 +141,10 @@
 				"Linux",
 				"Mac"
 			]
+		},
+		{
+			"Name": "ProceduralVegetationEditor",
+			"Enabled": true
 		}
 	]
 }

@@ -1,5 +1,6 @@
 #include "YIXI_Interaction/Story/YIXIInteractionStoryCoordinator.h"
 
+#include "Components/BoxComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -9,6 +10,7 @@
 #include "YIXI_Interaction/DialogueToy/YIXIToyCarryComponent.h"
 #include "YIXI_Interaction/ScriptedProjectile/YIXIScriptedRock.h"
 #include "YIXI_Interaction/ScriptedProjectile/YIXIStoryTriggerBox.h"
+#include "YIXI_Interaction/Story/YIXIV3Cinematic.h"
 #include "YIXI_Interaction/YIXIAudioTriggerBox.h"
 #include "YIXI_Interaction/YIXIDoubleDoor.h"
 
@@ -22,6 +24,13 @@ AYIXIInteractionStoryCoordinator::AYIXIInteractionStoryCoordinator()
 void AYIXIInteractionStoryCoordinator::BeginPlay()
 {
 	Super::BeginPlay();
+
+	bUsesV3Presentation = V3Cinematic != nullptr;
+	if (bUsesV3Presentation && (!IsValid(V3Cinematic) || V3Cinematic->GetWorld() != GetWorld()))
+	{
+		StopStory(TEXT("the cinematic must belong to this story world"));
+		return;
+	}
 
 	const AActor* RequiredActors[] = {
 		ClassroomDoor, CorridorAudio, RoadRock, BypassTrigger, Girl, ToyPickup, ReturnTrigger, AttackCue, DiscoveryTrigger
@@ -62,7 +71,19 @@ void AYIXIInteractionStoryCoordinator::BeginPlay()
 	ToyPickup->OnToyPickedUp.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleToyPickedUp);
 	ReturnTrigger->OnPlayerEntered.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleReturnEntered);
 	AttackCue->OnImpact.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleAttackImpact);
-	DiscoveryTrigger->OnPlayerEntered.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleDiscoveryEntered);
+	if (UBoxComponent* Box = GetFixedStageTrigger())
+	{
+		Box->OnComponentBeginOverlap.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleFixedStageEntered);
+		Box->OnComponentEndOverlap.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleFixedStageExited);
+	}
+	else
+	{
+		DiscoveryTrigger->OnPlayerEntered.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleDiscoveryEntered);
+		if (bUsesV3Presentation)
+		{
+			DiscoveryTrigger->OnPlayerExited.AddDynamic(this, &AYIXIInteractionStoryCoordinator::HandleDiscoveryExited);
+		}
+	}
 	GetWorldTimerManager().SetTimerForNextTick(this, &AYIXIInteractionStoryCoordinator::CheckInitialDoorState);
 	UE_LOG(LogYIXIInteractionStory, Display, TEXT("%s is waiting for the classroom door."), *GetName());
 }
@@ -80,7 +101,16 @@ void AYIXIInteractionStoryCoordinator::EndPlay(const EEndPlayReason::Type EndPla
 	if (IsValid(ToyPickup)) { ToyPickup->OnToyPickedUp.RemoveAll(this); }
 	if (IsValid(ReturnTrigger)) { ReturnTrigger->OnPlayerEntered.RemoveAll(this); }
 	if (IsValid(AttackCue)) { AttackCue->OnImpact.RemoveAll(this); }
-	if (IsValid(DiscoveryTrigger)) { DiscoveryTrigger->OnPlayerEntered.RemoveAll(this); }
+	if (IsValid(DiscoveryTrigger))
+	{
+		DiscoveryTrigger->OnPlayerEntered.RemoveAll(this);
+		DiscoveryTrigger->OnPlayerExited.RemoveAll(this);
+	}
+	if (UBoxComponent* Box = GetFixedStageTrigger())
+	{
+		Box->OnComponentBeginOverlap.RemoveAll(this);
+		Box->OnComponentEndOverlap.RemoveAll(this);
+	}
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -99,6 +129,10 @@ bool AYIXIInteractionStoryCoordinator::IsParticipant(const APawn* Pawn) const
 
 void AYIXIInteractionStoryCoordinator::SetStage(EYIXIInteractionStoryStage NewStage)
 {
+	if (NewStage != EYIXIInteractionStoryStage::Discovery)
+	{
+		GetWorldTimerManager().ClearTimer(FixedStageRetryTimer);
+	}
 	Stage = NewStage;
 	UE_LOG(LogYIXIInteractionStory, Display, TEXT("%s stage %s."), *GetName(), *UEnum::GetValueAsString(Stage));
 	OnStageChanged.Broadcast(Stage);
@@ -247,6 +281,10 @@ void AYIXIInteractionStoryCoordinator::HandleToyPickedUp(APawn* Pawn)
 	{
 		return;
 	}
+	if (IsValid(V3Cinematic))
+	{
+		V3Cinematic->PrepareNight(this, Pawn);
+	}
 	SetStage(EYIXIInteractionStoryStage::Return);
 	if (IsValid(ReturnTrigger) && ReturnTrigger->ContainsPawn(Pawn))
 	{
@@ -276,8 +314,25 @@ void AYIXIInteractionStoryCoordinator::HandleAttackImpact(int32 RequestId)
 	{
 		return;
 	}
+	if (bUsesV3Presentation)
+	{
+		if (!IsValid(V3Cinematic))
+		{
+			StopStory(TEXT("the assigned cinematic is no longer available"));
+			return;
+		}
+		if (IsValid(Girl))
+		{
+			Girl->SetUnavailable();
+			Girl->SetActorHiddenInGame(true);
+			Girl->SetActorEnableCollision(false);
+		}
+		V3Cinematic->HandleAttackImpact(AttackCue);
+	}
 	SetStage(EYIXIInteractionStoryStage::Discovery);
-	if (IsValid(DiscoveryTrigger) && DiscoveryTrigger->ContainsPawn(Pawn))
+	const UBoxComponent* FixedTrigger = GetFixedStageTrigger();
+	if (FixedTrigger ? FixedTrigger->IsOverlappingActor(Pawn) :
+		(IsValid(DiscoveryTrigger) && DiscoveryTrigger->ContainsPawn(Pawn)))
 	{
 		HandleDiscoveryEntered(Pawn);
 	}
@@ -285,8 +340,22 @@ void AYIXIInteractionStoryCoordinator::HandleAttackImpact(int32 RequestId)
 
 void AYIXIInteractionStoryCoordinator::HandleDiscoveryEntered(APawn* Pawn)
 {
-	if (Stage != EYIXIInteractionStoryStage::Discovery || !IsParticipant(Pawn))
+	if (Stage != EYIXIInteractionStoryStage::Discovery || bRequiresDiscoveryExit || !IsParticipant(Pawn))
 	{
+		return;
+	}
+	if (bUsesV3Presentation)
+	{
+		if (GetFixedStageTrigger())
+		{
+			if (!GetWorldTimerManager().IsTimerActive(FixedStageRetryTimer))
+			{
+				UE_LOG(LogYIXIInteractionStory, Display, TEXT("Fixed stage pending for %s."), *GetNameSafe(Pawn));
+				GetWorldTimerManager().SetTimer(FixedStageRetryTimer, this, &AYIXIInteractionStoryCoordinator::TryPendingFixedStage, .15f, true);
+			}
+			return;
+		}
+		BeginV3Presentation(Pawn);
 		return;
 	}
 	if (IsValid(Girl))
@@ -312,26 +381,162 @@ void AYIXIInteractionStoryCoordinator::HandleDiscoveryEntered(APawn* Pawn)
 	}
 }
 
-void AYIXIInteractionStoryCoordinator::StartMatchCut(APawn* Pawn, AActor* DroppedToy)
+void AYIXIInteractionStoryCoordinator::TryPendingFixedStage()
 {
-	if (Stage != EYIXIInteractionStoryStage::Discovery || PendingMatchCut != 0)
+	APawn* Pawn = StoryPawn.Get();
+	const UBoxComponent* Box = GetFixedStageTrigger();
+	if (bEndingPlay || Stage != EYIXIInteractionStoryStage::Discovery || bRequiresDiscoveryExit ||
+		!IsParticipant(Pawn) || !Box || !Box->IsOverlappingActor(Pawn))
+	{
+		GetWorldTimerManager().ClearTimer(FixedStageRetryTimer);
+		return;
+	}
+	if (V3Cinematic->CanEnterFixedStage(Pawn))
+	{
+		BeginV3Presentation(Pawn);
+	}
+}
+
+void AYIXIInteractionStoryCoordinator::BeginV3Presentation(APawn* Pawn)
+{
+	const UYIXIToyCarryComponent* Carry = UYIXIToyCarryComponent::FindForPawn(Pawn);
+	if (!IsValid(V3Cinematic) || !IsValid(Carry) || !IsValid(Carry->GetToyActor())
+		|| Carry->GetCarryState() != EYIXIToyCarryState::HeldHand)
+	{
+		GetWorldTimerManager().ClearTimer(FixedStageRetryTimer);
+		UE_LOG(LogYIXIInteractionStory, Warning, TEXT("Discovery requires the cinematic and the player's hand-held toy."));
+		return;
+	}
+	PresentationToy = Carry->GetToyActor();
+	SetStage(EYIXIInteractionStoryStage::V3Presentation);
+	if (Stage == EYIXIInteractionStoryStage::V3Presentation && !bEndingPlay
+		&& (!IsValid(V3Cinematic) || !V3Cinematic->BeginDiscovery(this, Pawn)))
+	{
+		AbortV3Presentation(Pawn);
+	}
+}
+
+void AYIXIInteractionStoryCoordinator::HandleDiscoveryExited(APawn* Pawn)
+{
+	if (!bRequiresDiscoveryExit || Stage != EYIXIInteractionStoryStage::Discovery || !IsParticipant(Pawn))
 	{
 		return;
+	}
+	// Mover may refresh overlap pairs while restoring the same pose. Re-arm only outside the authored box.
+	const UBoxComponent* Box = GetFixedStageTrigger();
+	if (!Box && IsValid(DiscoveryTrigger)) Box = DiscoveryTrigger->TriggerBox;
+	if (!IsValid(Box)) return;
+	const FVector LocalPosition = Box->GetComponentTransform().InverseTransformPosition(Pawn->GetActorLocation());
+	if (!FBox::BuildAABB(FVector::ZeroVector, Box->GetUnscaledBoxExtent()).IsInsideOrOn(LocalPosition)
+		&& !Box->IsOverlappingActor(Pawn))
+	{
+		bRequiresDiscoveryExit = false;
+	}
+}
+
+UBoxComponent* AYIXIInteractionStoryCoordinator::GetFixedStageTrigger() const
+{
+	return IsValid(V3Cinematic) && V3Cinematic->bUseFixedStage ? V3Cinematic->StageTrigger.Get() : nullptr;
+}
+
+void AYIXIInteractionStoryCoordinator::HandleFixedStageEntered(UPrimitiveComponent* Component, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& Sweep)
+{
+	HandleDiscoveryEntered(Cast<APawn>(OtherActor));
+}
+
+void AYIXIInteractionStoryCoordinator::HandleFixedStageExited(UPrimitiveComponent* Component, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex)
+{
+	HandleDiscoveryExited(Cast<APawn>(OtherActor));
+}
+
+int32 AYIXIInteractionStoryCoordinator::RequestV3Cut(APawn* Pawn, AActor* DroppedToy)
+{
+	if (Stage != EYIXIInteractionStoryStage::V3Presentation || !IsParticipant(Pawn)
+		|| !IsValid(DroppedToy) || PresentationToy.Get() != DroppedToy)
+	{
+		return 0;
+	}
+	const UYIXIToyCarryComponent* Carry = UYIXIToyCarryComponent::FindForPawn(Pawn);
+	if (!IsValid(Carry) || Carry->GetCarryState() != EYIXIToyCarryState::Dropped || Carry->GetToyActor() != DroppedToy)
+	{
+		return 0;
+	}
+	return StartMatchCut(Pawn, DroppedToy);
+}
+
+void AYIXIInteractionStoryCoordinator::FinishV3Presentation(APawn* Pawn)
+{
+	if (bEndingPlay || Pawn != StoryPawn.Get() || Stage != EYIXIInteractionStoryStage::V3NightPresentation)
+	{
+		return;
+	}
+	const UYIXIToyCarryComponent* Carry = IsParticipant(Pawn) ? UYIXIToyCarryComponent::FindForPawn(Pawn) : nullptr;
+	if (!IsValid(Carry) || !PresentationToy.IsValid() || Carry->GetToyActor() != PresentationToy.Get()
+		|| Carry->GetCarryState() != EYIXIToyCarryState::AttachedAtWaist)
+	{
+		StopStory(TEXT("the night presentation lost its waist-mounted toy"));
+		return;
+	}
+	PresentationToy.Reset();
+	SetStage(EYIXIInteractionStoryStage::Completed);
+}
+
+void AYIXIInteractionStoryCoordinator::AbortV3Presentation(APawn* Pawn)
+{
+	if (bEndingPlay || !bUsesV3Presentation || Pawn != StoryPawn.Get()
+		|| (Stage != EYIXIInteractionStoryStage::V3Presentation && Stage != EYIXIInteractionStoryStage::MatchCut))
+	{
+		return;
+	}
+	GetWorldTimerManager().ClearTimer(MatchCutTimeoutTimer);
+	PendingMatchCut = 0;
+	PendingToy.Reset();
+	const UYIXIToyCarryComponent* Carry = IsParticipant(Pawn) ? UYIXIToyCarryComponent::FindForPawn(Pawn) : nullptr;
+	const bool bCanRetry = IsValid(Carry) && PresentationToy.IsValid()
+		&& Carry->GetToyActor() == PresentationToy.Get() && Carry->GetCarryState() == EYIXIToyCarryState::HeldHand;
+	PresentationToy.Reset();
+	if (bCanRetry)
+	{
+		bRequiresDiscoveryExit = true;
+		SetStage(EYIXIInteractionStoryStage::Discovery);
+		if (GetFixedStageTrigger()) HandleDiscoveryExited(Pawn);
+	}
+	else
+	{
+		StopStory(TEXT("the cinematic ended without the original pawn and hand-held toy; player control must be returned"));
+	}
+}
+
+int32 AYIXIInteractionStoryCoordinator::StartMatchCut(APawn* Pawn, AActor* DroppedToy)
+{
+	const EYIXIInteractionStoryStage ExpectedStage = bUsesV3Presentation ?
+		EYIXIInteractionStoryStage::V3Presentation : EYIXIInteractionStoryStage::Discovery;
+	if (Stage != ExpectedStage || PendingMatchCut != 0)
+	{
+		return 0;
 	}
 	const int32 RequestId = ++NextRequestId;
-	PendingMatchCut = RequestId;
 	SetStage(EYIXIInteractionStoryStage::MatchCut);
-	if (bEndingPlay || PendingMatchCut != RequestId)
+	if (bEndingPlay || Stage != EYIXIInteractionStoryStage::MatchCut || NextRequestId != RequestId
+		|| !IsParticipant(Pawn) || !IsValid(DroppedToy))
 	{
-		return;
+		if (!bEndingPlay && !bUsesV3Presentation && Stage == EYIXIInteractionStoryStage::MatchCut && NextRequestId == RequestId)
+		{
+			SetStage(EYIXIInteractionStoryStage::Discovery);
+		}
+		return 0;
 	}
+	PendingMatchCut = RequestId;
+	PendingToy = DroppedToy;
 	UE_LOG(LogYIXIInteractionStory, Display, TEXT("%s Match Cut request %d with %s."), *GetName(), RequestId, *GetNameSafe(DroppedToy));
 	GetWorldTimerManager().SetTimer(MatchCutTimeoutTimer, FTimerDelegate::CreateWeakLambda(this, [this, RequestId]
 	{
 		UE_LOG(LogYIXIInteractionStory, Warning, TEXT("%s Match Cut request %d timed out."), *GetName(), RequestId);
 		CompleteMatchCut(RequestId, false);
 	}), FMath::Max(0.1f, MatchCutTimeout), false);
-	if (bUseIsolatedMatchCutStandIn)
+	if (bUseIsolatedMatchCutStandIn && !bUsesV3Presentation)
 	{
 		GetWorldTimerManager().SetTimer(StandInTimer, FTimerDelegate::CreateWeakLambda(this, [this, RequestId]
 		{
@@ -339,6 +544,7 @@ void AYIXIInteractionStoryCoordinator::StartMatchCut(APawn* Pawn, AActor* Droppe
 		}), FMath::Max(0.01f, StandInDelay), false);
 	}
 	OnMatchCutRequested.Broadcast(RequestId, Pawn, DroppedToy);
+	return RequestId;
 }
 
 bool AYIXIInteractionStoryCoordinator::CompleteMatchCut(int32 RequestId, bool bSucceeded)
@@ -348,19 +554,33 @@ bool AYIXIInteractionStoryCoordinator::CompleteMatchCut(int32 RequestId, bool bS
 		return false;
 	}
 	PendingMatchCut = 0;
+	const TWeakObjectPtr<AActor> ExpectedToy = PendingToy;
+	PendingToy.Reset();
 	GetWorldTimerManager().ClearTimer(MatchCutTimeoutTimer);
 	GetWorldTimerManager().ClearTimer(StandInTimer);
 
 	APawn* Pawn = StoryPawn.Get();
 	UYIXIToyCarryComponent* Carry = bSucceeded && IsParticipant(Pawn) ? UYIXIToyCarryComponent::FindForPawn(Pawn) : nullptr;
 	const bool bAttached = IsValid(Carry) && Carry->GetCarryState() == EYIXIToyCarryState::Dropped
+		&& ExpectedToy.IsValid() && Carry->GetToyActor() == ExpectedToy.Get()
 		&& Carry->TryAttachToWaist() && IsParticipant(Pawn) && IsValid(Carry)
-		&& Carry->GetCarryState() == EYIXIToyCarryState::AttachedAtWaist && IsValid(Carry->GetToyActor());
-	if (!bEndingPlay)
+		&& Carry->GetCarryState() == EYIXIToyCarryState::AttachedAtWaist && ExpectedToy.IsValid()
+		&& Carry->GetToyActor() == ExpectedToy.Get();
+	// Attaching broadcasts the carry transition and may synchronously abort this presentation.
+	if (bEndingPlay || Stage != EYIXIInteractionStoryStage::MatchCut || NextRequestId != RequestId)
 	{
-		UE_LOG(LogYIXIInteractionStory, Display, TEXT("%s Match Cut request %d: %s."), *GetName(), RequestId,
-			bAttached ? TEXT("toy attached at waist") : TEXT("not completed; reenter discovery to retry"));
-		SetStage(bAttached ? EYIXIInteractionStoryStage::Completed : EYIXIInteractionStoryStage::Discovery);
+		return false;
 	}
+	UE_LOG(LogYIXIInteractionStory, Display, TEXT("%s Match Cut request %d: %s."), *GetName(), RequestId,
+		bAttached ? TEXT("toy attached at waist") : TEXT("not completed; reenter discovery to retry"));
+	if (bAttached)
+	{
+		SetStage(bUsesV3Presentation ? EYIXIInteractionStoryStage::V3NightPresentation : EYIXIInteractionStoryStage::Completed);
+	}
+	else if (!bUsesV3Presentation)
+	{
+		SetStage(EYIXIInteractionStoryStage::Discovery);
+	}
+	// A failed cinematic commit restores the pawn and prop before AbortV3Presentation reopens the trigger.
 	return bAttached;
 }

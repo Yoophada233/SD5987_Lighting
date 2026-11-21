@@ -40,12 +40,14 @@ AYIXIInteractiveDoor::AYIXIInteractiveDoor()
 	DoorLeaf->SetMobility(EComponentMobility::Movable);
 	HandleMarker = CreateDefaultSubobject<USceneComponent>(TEXT("HandleMarker"));
 	HandleMarker->SetupAttachment(LeafMount);
+	InteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("InteractionAnchor"));
+	InteractionAnchor->SetupAttachment(HandleMarker);
 	SoundOrigin = CreateDefaultSubobject<USceneComponent>(TEXT("SoundOrigin"));
 	SoundOrigin->SetupAttachment(HingePivot);
 	SoundOrigin->SetRelativeLocation(FVector(0.0, 0.0, 100.0));
 
 	DetectionPreview = CreateDefaultSubobject<USphereComponent>(TEXT("DetectionPreview"));
-	DetectionPreview->SetupAttachment(HandleMarker);
+	DetectionPreview->SetupAttachment(InteractionAnchor);
 	DetectionPreview->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	DetectionPreview->SetGenerateOverlapEvents(false);
 	DetectionPreview->SetHiddenInGame(true);
@@ -107,7 +109,7 @@ void AYIXIInteractiveDoor::ApplyComponentConfiguration()
 FYIXIInteractionPrompt AYIXIInteractiveDoor::GetInteractionPrompt_Implementation(APawn* Interactor) const
 {
 	FYIXIInteractionPrompt Prompt;
-	Prompt.WorldLocation = HandleMarker->GetComponentTransform().TransformPosition(PromptAnchorOffset);
+	Prompt.WorldLocation = InteractionAnchor->GetComponentTransform().TransformPosition(PromptAnchorOffset);
 	Prompt.DetectionRange = FMath::Max(0.0f, DetectionRange);
 	Prompt.InteractRange = FMath::Clamp(InteractRange, 0.0f, Prompt.DetectionRange);
 	const bool bWouldClose = DoorState == EYIXIDoorState::Open || DoorState == EYIXIDoorState::Opening;

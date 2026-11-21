@@ -57,6 +57,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Components")
 	TObjectPtr<USceneComponent> HandleMarker;
 
+	/** Editable prompt position relative to the moving handle. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Components")
+	TObjectPtr<USceneComponent> InteractionAnchor;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Components")
 	TObjectPtr<USceneComponent> SoundOrigin;
 

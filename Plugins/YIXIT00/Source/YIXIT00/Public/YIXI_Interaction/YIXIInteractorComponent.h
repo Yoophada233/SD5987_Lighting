@@ -62,6 +62,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Interaction")
 	void SetInteractionKeyBindingEnabled(bool bEnabled);
 
+	/** Temporarily suspend both targeting and dispatch while a presentation owns the local view. */
+	UFUNCTION(BlueprintCallable, Category = "Interaction")
+	void SetCinematicSuppressed(bool bSuppressed);
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool IsCinematicSuppressed() const { return bCinematicSuppressed; }
+
 protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
@@ -99,4 +106,5 @@ private:
 	float TimeUntilCandidateRefresh = 0.0f;
 	float TimeUntilScan = 0.0f;
 	uint64 LastRequestFrame = MAX_uint64;
+	bool bCinematicSuppressed = false;
 };
