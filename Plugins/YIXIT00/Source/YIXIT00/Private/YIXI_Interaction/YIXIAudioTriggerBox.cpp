@@ -120,9 +120,27 @@ void AYIXIAudioTriggerBox::TryTriggerForPawn(APawn* Pawn)
 	}
 	PlayersInside.Add(Player);
 
-	if (!bEnabled || (bTriggerOnce && TriggerCount > 0))
+	TriggerForPlayer(Pawn);
+}
+
+bool AYIXIAudioTriggerBox::TryTriggerFirstOverlappingPlayer(APawn* Pawn)
+{
+	const APlayerController* Controller = IsValid(Pawn) ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
+	if (!Controller || Controller->GetPawn() != Pawn || !bTriggerOnce || TriggerCount != 0
+		|| !BoxCollision->IsOverlappingActor(Pawn))
 	{
-		return;
+		return false;
+	}
+
+	PlayersInside.Add(TWeakObjectPtr<APawn>(Pawn));
+	return TriggerForPlayer(Pawn);
+}
+
+bool AYIXIAudioTriggerBox::TriggerForPlayer(APawn* Pawn)
+{
+	if (!bEnabled || IsActorBeingDestroyed() || (bTriggerOnce && TriggerCount > 0))
+	{
+		return false;
 	}
 
 	++TriggerCount;
@@ -131,7 +149,7 @@ void AYIXIAudioTriggerBox::TryTriggerForPawn(APawn* Pawn)
 	OnTriggered.Broadcast(Pawn);
 	if (IsActorBeingDestroyed() || !bEnabled)
 	{
-		return;
+		return true;
 	}
 
 	QueueSound(CrowdPanicSound, CrowdPanicDelay, CrowdPanicVolume);
@@ -141,6 +159,7 @@ void AYIXIAudioTriggerBox::TryTriggerForPawn(APawn* Pawn)
 	{
 		QueueSound(Entry.Sound, Entry.Delay, Entry.Volume);
 	}
+	return true;
 }
 
 void AYIXIAudioTriggerBox::QueueSound(USoundBase* Sound, float Delay, float Volume)

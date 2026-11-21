@@ -1,4 +1,5 @@
 #include "YIXIFireflyScatter.h"
+#include "Engine/World.h"
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/Pawn.h"

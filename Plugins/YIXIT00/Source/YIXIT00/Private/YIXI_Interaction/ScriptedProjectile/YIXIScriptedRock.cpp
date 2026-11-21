@@ -1,0 +1,222 @@
+#include "YIXI_Interaction/ScriptedProjectile/YIXIScriptedRock.h"
+
+#include "CollisionQueryParams.h"
+#include "CollisionShape.h"
+#include "Components/BoxComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Curves/CurveFloat.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "UObject/ConstructorHelpers.h"
+
+AYIXIScriptedRock::AYIXIScriptedRock()
+{
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+
+	USceneComponent* SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
+	SetRootComponent(SceneRoot);
+
+	StartAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("StartAnchor"));
+	StartAnchor->SetupAttachment(SceneRoot);
+	StartAnchor->SetRelativeLocation(FVector(0.0, 0.0, 350.0));
+
+	ImpactAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("ImpactAnchor"));
+	ImpactAnchor->SetupAttachment(SceneRoot);
+	ImpactAnchor->SetRelativeLocation(FVector(450.0, 0.0, 100.0));
+
+	RockMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RockMesh"));
+	RockMesh->SetupAttachment(SceneRoot);
+	RockMesh->SetMobility(EComponentMobility::Movable);
+	RockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RockMesh->SetCanEverAffectNavigation(false);
+	RockMesh->SetHiddenInGame(true);
+
+	static const ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultRock(
+		TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	RockMesh->SetStaticMesh(DefaultRock.Object);
+	RockMesh->SetRelativeScale3D(FVector(2.4, 1.3, 2.0));
+
+	Blocker = CreateDefaultSubobject<UBoxComponent>(TEXT("Blocker"));
+	Blocker->SetupAttachment(ImpactAnchor);
+	Blocker->InitBoxExtent(FVector(110.0, 60.0, 85.0));
+	Blocker->SetMobility(EComponentMobility::Movable);
+	Blocker->SetCollisionObjectType(ECC_WorldDynamic);
+	Blocker->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Blocker->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	Blocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Blocker->SetGenerateOverlapEvents(false);
+	Blocker->SetCanEverAffectNavigation(false);
+	Blocker->SetHiddenInGame(true);
+}
+
+bool AYIXIScriptedRock::Launch(int32 RequestId)
+{
+	if (RequestId <= 0 || RockState != EYIXIScriptedRockState::Idle || !HasActorBegunPlay()
+		|| IsActorBeingDestroyed() || !FMath::IsFinite(TravelDuration) || TravelDuration <= 0.0f
+		|| !FMath::IsFinite(VerticalLift))
+	{
+		return false;
+	}
+
+	const FTransform Start = StartAnchor->GetComponentTransform();
+	const FTransform End = ImpactAnchor->GetComponentTransform();
+	const FTransform BlockageTransform = Blocker->GetComponentTransform();
+	const FVector BlockageExtent = Blocker->GetScaledBoxExtent();
+	if (Start.ContainsNaN() || End.ContainsNaN()
+		|| (bEnableBlockageAfterImpact && (!GetActorEnableCollision()
+			|| BlockageTransform.ContainsNaN() || BlockageExtent.ContainsNaN()
+			|| BlockageExtent.GetMin() <= UE_KINDA_SMALL_NUMBER)))
+	{
+		return false;
+	}
+
+	// Keep the mesh's authored scale in both poses. Anchors determine position and rotation.
+	const FVector MeshScale = RockMesh->GetComponentScale();
+	if (MeshScale.ContainsNaN())
+	{
+		return false;
+	}
+	LaunchPose = FTransform(Start.GetRotation(), Start.GetLocation(), MeshScale);
+	LandingPose = FTransform(End.GetRotation(), End.GetLocation(), MeshScale);
+	LandingBlockerPose = BlockageTransform;
+	ActiveRequestId = RequestId;
+	ActiveDuration = TravelDuration;
+	ActiveLift = FMath::Max(0.0f, VerticalLift);
+	bPendingBlockage = bEnableBlockageAfterImpact;
+	RockState = EYIXIScriptedRockState::InFlight;
+
+	Blocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RockMesh->SetWorldTransform(LaunchPose);
+	RockMesh->SetHiddenInGame(false);
+	SetActorTickEnabled(true);
+
+	if (LaunchSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, LaunchSound, LaunchPose.GetLocation());
+	}
+	OnLaunched.Broadcast(ActiveRequestId);
+	return true;
+}
+
+bool AYIXIScriptedRock::IsBlockageReady() const
+{
+	return RockState == EYIXIScriptedRockState::Blocking && GetActorEnableCollision() && Blocker->IsPhysicsStateCreated()
+		&& Blocker->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics
+		&& Blocker->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+}
+
+void AYIXIScriptedRock::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (IsActorBeingDestroyed())
+	{
+		return;
+	}
+	if (RockState == EYIXIScriptedRockState::WaitingForClearance)
+	{
+		TryEnableBlockage();
+		return;
+	}
+	if (RockState != EYIXIScriptedRockState::InFlight)
+	{
+		return;
+	}
+
+	ElapsedTime = FMath::Min(ElapsedTime + DeltaSeconds, ActiveDuration);
+	const float Alpha = ElapsedTime / ActiveDuration;
+	if (Alpha >= 1.0f)
+	{
+		FinishTravel();
+		return;
+	}
+
+	const FVector BasePosition = FMath::Lerp(LaunchPose.GetLocation(), LandingPose.GetLocation(), Alpha);
+	const FVector Position = BasePosition + FVector::UpVector * (ActiveLift * EvaluateVerticalShape(Alpha));
+	const FQuat Rotation = FQuat::Slerp(LaunchPose.GetRotation(), LandingPose.GetRotation(), Alpha);
+	RockMesh->SetWorldLocationAndRotation(Position, Rotation);
+}
+
+float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
+{
+	if (VerticalShape)
+	{
+		const float Start = VerticalShape->GetFloatValue(0.0f);
+		const float End = VerticalShape->GetFloatValue(1.0f);
+		const float Shape = VerticalShape->GetFloatValue(Alpha) - FMath::Lerp(Start, End, Alpha);
+		if (FMath::IsFinite(Shape))
+		{
+			return Shape;
+		}
+	}
+
+	return 4.0f * Alpha * (1.0f - Alpha);
+}
+
+void AYIXIScriptedRock::FinishTravel()
+{
+	RockMesh->SetWorldTransform(LandingPose);
+	bImpactOccurred = true;
+	RockState = bPendingBlockage ? EYIXIScriptedRockState::WaitingForClearance
+		: EYIXIScriptedRockState::Impacted;
+	SetActorTickEnabled(bPendingBlockage);
+	if (bPendingBlockage)
+	{
+		Blocker->SetWorldTransform(LandingBlockerPose);
+	}
+
+	if (ImpactSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, LandingPose.GetLocation());
+	}
+
+	// Consumers see the landed pose before clearance can fire its separate event.
+	OnImpact.Broadcast(ActiveRequestId);
+	if (!IsActorBeingDestroyed() && RockState == EYIXIScriptedRockState::WaitingForClearance)
+	{
+		TryEnableBlockage();
+	}
+}
+
+void AYIXIScriptedRock::TryEnableBlockage()
+{
+	if (!GetActorEnableCollision() || !Blocker->IsRegistered())
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const FTransform BlockerPose = Blocker->GetComponentTransform();
+	const FVector Extent = Blocker->GetScaledBoxExtent();
+	if (BlockerPose.ContainsNaN() || Extent.ContainsNaN() || Extent.GetMin() <= UE_KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	const FCollisionShape ClearanceShape = FCollisionShape::MakeBox(Extent + FVector(2.0));
+	const FCollisionObjectQueryParams PawnObjects(ECC_Pawn);
+	const FCollisionQueryParams Params(SCENE_QUERY_STAT(YIXIRockClearance), false, this);
+	if (World->OverlapAnyTestByObjectType(BlockerPose.GetLocation(), BlockerPose.GetRotation(),
+		PawnObjects, ClearanceShape, Params))
+	{
+		return;
+	}
+
+	Blocker->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	Blocker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	if (!Blocker->IsPhysicsStateCreated())
+	{
+		Blocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		return;
+	}
+	RockState = EYIXIScriptedRockState::Blocking;
+	SetActorTickEnabled(false);
+	OnBlockageReady.Broadcast(ActiveRequestId);
+}

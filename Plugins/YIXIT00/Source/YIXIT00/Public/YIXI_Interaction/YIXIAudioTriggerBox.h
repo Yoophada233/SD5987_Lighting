@@ -93,6 +93,9 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category = "YIXI|Trigger")
 	int32 TriggerCount = 0;
 
+	/** Gives an armed one-shot trigger a chance to accept a player who was already inside. */
+	bool TryTriggerFirstOverlappingPlayer(APawn* Pawn);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -109,6 +112,7 @@ private:
 	void ScheduleOverlapCheck();
 	void CheckOverlappingPlayers();
 	void TryTriggerForPawn(APawn* Pawn);
+	bool TriggerForPlayer(APawn* Pawn);
 	void QueueSound(USoundBase* Sound, float Delay, float Volume);
 	void PlaySound(TWeakObjectPtr<USoundBase> Sound, float Volume);
 
