@@ -150,7 +150,7 @@ void AYIXIFireflyScatter::Tick(float DeltaSeconds)
 	const float Dist = FVector::Dist(Pawn->GetActorLocation(), GetActorLocation());
 	if (!bScattered)
 	{
-		if (Dist <= SenseRadius)
+		if (bScatterOnPlayer && Dist <= SenseRadius)
 		{
 			TriggerScatter();
 		}

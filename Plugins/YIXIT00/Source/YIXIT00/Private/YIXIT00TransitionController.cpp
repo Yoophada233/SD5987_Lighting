@@ -7,6 +7,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/SkyLightComponent.h"
@@ -370,6 +371,17 @@ void AYIXIT00TransitionController::HardCut(ACameraActor* Camera)
     PC->SetViewTarget(Camera, Cut);
     if (PC->PlayerCameraManager) PC->PlayerCameraManager->SetGameCameraCutThisFrame();
 }
+void AYIXIT00TransitionController::SetPawnFillLightVisible(bool bVisible)
+{
+    if (!IsValid(TestPawn)) return;
+    TArray<UPointLightComponent*> FillLights;
+    TestPawn->GetComponents<UPointLightComponent>(FillLights);
+    for (UPointLightComponent* Light : FillLights)
+    {
+        if (IsValid(Light)) Light->SetVisibility(bVisible);
+    }
+    Event(bVisible ? TEXT("P04_PAWN_FILL_LIGHT_SHOWN_DAY") : TEXT("P04_PAWN_FILL_LIGHT_HIDDEN_NIGHT"));
+}
 void AYIXIT00TransitionController::TriggerTransition()
 {
     Event(TEXT("T00_TRIGGER_RECEIVED"));
@@ -387,6 +399,7 @@ void AYIXIT00TransitionController::HoldInput()
 {
     if (bInputHeld) return;
     PawnAtTrigger = TestPawn->GetPathName();
+    SetPawnFillLightVisible(true);
     PC->SetIgnoreMoveInput(true); PC->SetIgnoreLookInput(true);
     TestPawn->DisableInput(PC); bInputHeld = true;
     // Neutral Mover input during the closeups, including cached Blueprint input.
@@ -494,7 +507,7 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
                 if (!L01LightingRig->CameraBCutObserved()) { Finish(false,TEXT("P03 Sequence frame 30 failed; see lighting diagnostic")); return; }
                 Event(L01LightingRig->bSequenceOwnsLighting ? TEXT("T01_P03_SEQUENCE_CUT_OBSERVED") : TEXT("T01_L01_CUT_OBSERVED"));
             }
-            Phase=EPhase::Night; PhaseAt=Now; CutObservedFrame=GFrameCounter; Event(TEXT("CameraCutObserved")); Event(TEXT("T00_CAMERA_CUT"));
+            Phase=EPhase::Night; PhaseAt=Now; CutObservedFrame=GFrameCounter; SetPawnFillLightVisible(false); Event(TEXT("CameraCutObserved")); Event(TEXT("T00_CAMERA_CUT"));
         }
         else if (Now-PhaseAt>2) Finish(false,TEXT("Hard cut did not reach Camera_B; possible camera ownership conflict"));
     }

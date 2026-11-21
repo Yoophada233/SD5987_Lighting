@@ -288,6 +288,7 @@ void AYIXIT00TransitionController::BeginFocusEnter()
 
 void AYIXIT00TransitionController::BeginFocusReturn(bool bNight)
 {
+    if (!bNight) SetPawnFillLightVisible(true);
     FString Reason;
     if (!FocusRig || !PC || !PC->PlayerCameraManager || !FocusViewCamera || !SamePossession())
     { FocusFailure(TEXT("Return camera/Pawn/controller unavailable")); return; }
