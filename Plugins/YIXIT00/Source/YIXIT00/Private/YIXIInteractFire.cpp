@@ -4,6 +4,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
@@ -46,6 +47,10 @@ AYIXIInteractFire::AYIXIInteractFire()
 	FireEffect->SetupAttachment(FireAnchor);
 	FireEffect->SetAutoActivate(false);
 	FireEffect->bAutoActivate = false;
+
+	FireLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("FireLight"));
+	FireLight->SetupAttachment(FireAnchor);
+	FireLight->SetMobility(EComponentMobility::Movable);
 
 	// 默认用你指定的粒子。
 	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> DefaultFire(TEXT("/Game/VFX/NS_InteractFire.NS_InteractFire"));
@@ -176,6 +181,18 @@ void AYIXIInteractFire::InteractionPressed()
 
 void AYIXIInteractFire::ApplyFireState()
 {
+	// 编辑器预览时灯光保持可见，方便调位置/强度；进游戏才跟火焰开关走。
+	if (!HasActorBegunPlay())
+	{
+		if (IsValid(FireLight))
+		{
+			FireLight->SetVisibility(true);
+		}
+	}
+	else if (bFireLightFollowsFireState && IsValid(FireLight))
+	{
+		FireLight->SetVisibility(bFireOn);
+	}
 	if (!IsValid(FireEffect))
 	{
 		return;

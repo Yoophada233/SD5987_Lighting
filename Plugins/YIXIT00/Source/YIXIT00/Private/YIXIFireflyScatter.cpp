@@ -2,6 +2,7 @@
 #include "Engine/World.h"
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
+#include "Components/PointLightComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -28,6 +29,10 @@ AYIXIFireflyScatter::AYIXIFireflyScatter()
 	FireEffect->SetupAttachment(GetRootComponent());
 	FireEffect->SetAutoActivate(true);
 	FireEffect->bAutoActivate = true;
+
+	FireflyLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("FireflyLight"));
+	FireflyLight->SetupAttachment(FireEffect);
+	FireflyLight->SetMobility(EComponentMobility::Movable);
 
 	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> DefaultFireflies(TEXT("/Game/VFX/NS_Firefly.NS_Firefly"));
 	if (DefaultFireflies.Succeeded())
@@ -68,6 +73,10 @@ void AYIXIFireflyScatter::BeginPlay()
 		FireEffect->SetVisibility(true);
 		FireEffect->Activate(true);
 	}
+	if (bFireflyLightFollowsScatter && IsValid(FireflyLight))
+	{
+		FireflyLight->SetVisibility(true);
+	}
 	bScattered = false;
 	bScattering = false;
 	bKillPending = false;
@@ -104,6 +113,10 @@ void AYIXIFireflyScatter::Tick(float DeltaSeconds)
 			bScattered = true;
 			ScatteredAt = GetWorld()->GetTimeSeconds();
 			FireEffect->Deactivate(); // 先停新粒子；默认余烬按寿命自然熄灭。
+			if (bFireflyLightFollowsScatter && IsValid(FireflyLight))
+			{
+				FireflyLight->SetVisibility(false);
+			}
 			// 手动开了快速清场才到期清场。
 			if (bInstantClearRemainder)
 			{
@@ -137,7 +150,7 @@ void AYIXIFireflyScatter::Tick(float DeltaSeconds)
 	const float Dist = FVector::Dist(Pawn->GetActorLocation(), GetActorLocation());
 	if (!bScattered)
 	{
-		if (Dist <= SenseRadius)
+		if (bScatterOnPlayer && Dist <= SenseRadius)
 		{
 			TriggerScatter();
 		}
@@ -172,6 +185,10 @@ void AYIXIFireflyScatter::TriggerScatter()
 	ScatterPhase = 0.0f;
 	bScattering = true;
 	FireEffect->SetVisibility(true);
+	if (bFireflyLightFollowsScatter && IsValid(FireflyLight))
+	{
+		FireflyLight->SetVisibility(true);
+	}
 	if (!FireEffect->IsActive())
 	{
 		FireEffect->Activate(true);
@@ -191,6 +208,10 @@ void AYIXIFireflyScatter::Recover()
 	}
 	FireEffect->SetVisibility(true);
 	FireEffect->Activate(true);
+	if (bFireflyLightFollowsScatter && IsValid(FireflyLight))
+	{
+		FireflyLight->SetVisibility(true);
+	}
 	bScattered = false;
 	bScattering = false;
 	bKillPending = false;

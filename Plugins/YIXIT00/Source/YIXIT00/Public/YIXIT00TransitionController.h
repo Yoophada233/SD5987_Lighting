@@ -128,6 +128,7 @@ private:
     bool SamePossession() const;
     void PrimeViews();
     void HardCut(ACameraActor* Camera);
+    void SetPawnFillLightVisible(bool bVisible);
     void RestoreInput();
     void RestoreCamera();
     void Event(const FString& Name);

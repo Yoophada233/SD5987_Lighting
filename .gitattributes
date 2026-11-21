@@ -12,3 +12,4 @@
 *.uproject text
 *.uplugin text
 Content/Characters/Guard/Textures/Guard/T_Guard_Head_SRMF.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Fab/Megascans/3D/Historic_Medieval_Library_Torch_Metal_Rusty_03_xiwobio/Raw/SM_xiwobio_tier_0/Textures/T_xiwobio_8k_N.uasset filter=lfs diff=lfs merge=lfs -text

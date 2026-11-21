@@ -8,15 +8,16 @@ class USceneComponent;
 class USphereComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
+class UPointLightComponent;
 
 /**
- * 萤火虫（惊散式）：默认正常播放 NS_Firefly，玩家走近后驱散消失。
+ * 萤火虫（常亮式，惊散可选）：默认正常播放 NS_Firefly，玩家走近也不消失。
  *
  * - 不改原粒子资产：FireSystem 默认 /Game/VFX/NS_Firefly，原样播放。
- * - 驱散感做法（不依赖粒子内部参数，CPU/GPU、本地/世界空间都有效）：
- *   触发后保持 spawning 继续 0.7 秒，同时把 FireEffect 朝远离玩家的方向推，
- *   新粒子沿逃跑路径生成、旧粒子留在原地 → 一团萤火虫"惊起四散"的拖尾；
- *   推完立刻 Deactivate 停掉新粒子，剩下的按自身寿命自然熄灭。
+ * - 常亮模式（默认，bScatterOnPlayer = false）：遇到玩家不惊散、不消失，点光也不灭。
+ * - 想恢复老行为就勾上 bScatterOnPlayer：触发后保持 spawning 继续 ScatterDuration 秒，
+ *   同时把 FireEffect 朝远离玩家的方向推，新粒子沿逃跑路径生成、旧粒子留在原地 →
+ *   一团萤火虫"惊起四散"的拖尾；推完立刻 Deactivate 停掉新粒子，剩下的按自身寿命自然熄灭。
  * - 离开感应范围 + RegenDelay 后自动恢复（可关），回来继续飞。
  */
 UCLASS(Blueprintable, BlueprintType)
@@ -34,6 +35,14 @@ public:
 	/** 粒子组件：驱散时整体平移的就是它，感应中心不动。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Firefly")
 	TObjectPtr<UNiagaraComponent> FireEffect;
+
+	/** 点光源：挂在 FireEffect 下，跟萤火虫一起跑；位置、强度、颜色、范围等直接在细节面板调组件即可。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Firefly|Light")
+	TObjectPtr<UPointLightComponent> FireflyLight;
+
+	/** 萤火虫惊散消失时灯光是否一起灭；关掉后灯光常亮、只手动控制。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly|Light")
+	bool bFireflyLightFollowsScatter = true;
 
 	/** 感应范围可视化（编辑器可见，游戏中隐藏）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly")
@@ -54,6 +63,10 @@ public:
 	/** 距离检测间隔，越小越灵敏。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly|Sense", meta = (ClampMin = "0.01", Units = "s"))
 	float CheckInterval = 0.1f;
+
+	/** 遇到玩家是否惊散消失；默认关闭 = 常亮，遇到玩家也不散、灯也不灭。想恢复老行为就勾上。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly|Sense")
+	bool bScatterOnPlayer = false;
 
 	/** 惊起时长：这段时间内边推边生，拖出四散尾迹。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly|Scatter", meta = (ClampMin = "0.05", Units = "s"))
