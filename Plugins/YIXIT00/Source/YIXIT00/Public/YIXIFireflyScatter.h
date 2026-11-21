@@ -8,6 +8,7 @@ class USceneComponent;
 class USphereComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
+class UPointLightComponent;
 
 /**
  * 萤火虫（惊散式）：默认正常播放 NS_Firefly，玩家走近后驱散消失。
@@ -34,6 +35,14 @@ public:
 	/** 粒子组件：驱散时整体平移的就是它，感应中心不动。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Firefly")
 	TObjectPtr<UNiagaraComponent> FireEffect;
+
+	/** 点光源：挂在 FireEffect 下，跟萤火虫一起跑；位置、强度、颜色、范围等直接在细节面板调组件即可。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Firefly|Light")
+	TObjectPtr<UPointLightComponent> FireflyLight;
+
+	/** 萤火虫惊散消失时灯光是否一起灭；关掉后灯光常亮、只手动控制。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly|Light")
+	bool bFireflyLightFollowsScatter = true;
 
 	/** 感应范围可视化（编辑器可见，游戏中隐藏）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Firefly")

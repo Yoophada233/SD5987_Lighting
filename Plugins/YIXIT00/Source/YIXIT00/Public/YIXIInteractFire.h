@@ -10,6 +10,7 @@ class UStaticMeshComponent;
 class USphereComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
+class UPointLightComponent;
 
 /**
  * 可交互粒子火焰：玩家按 E 点燃 / 熄灭。
@@ -53,6 +54,14 @@ public:
 	/** 粒子组件：只跟 FireAnchor 走，不跟模型缩放。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Fire|Spawn")
 	TObjectPtr<UNiagaraComponent> FireEffect;
+
+	/** 点光源：挂在 FireAnchor 下，跟火焰走；位置、强度、颜色、范围等直接在细节面板调组件即可。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Fire|Light")
+	TObjectPtr<UPointLightComponent> FireLight;
+
+	/** 点光源是否跟火焰开关走；关掉后灯光常亮、只手动控制。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Light")
+	bool bFireLightFollowsFireState = true;
 
 	/** 粒子模板，默认 NS_InteractFire，可换别的 Niagara。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Spawn")
