@@ -158,6 +158,14 @@ void UYIXIV3AudioComponent::RestoreDayMix()
     SetDayEcho(0.f);
 }
 
+void UYIXIV3AudioComponent::CancelDayMix()
+{
+    EndNightPreview();
+    StopDayVoices();
+    if (DayDirect) DayDirect->SetSubmixOutputVolume(this, 1.f);
+    if (WetReturn) WetReturn->SetSubmixOutputVolume(this, 0.f);
+}
+
 void UYIXIV3AudioComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     EndNightPreview();

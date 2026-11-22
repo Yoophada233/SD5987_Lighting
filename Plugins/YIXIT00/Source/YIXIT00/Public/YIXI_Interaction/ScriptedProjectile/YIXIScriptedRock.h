@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "YIXIScriptedRock.generated.h"
 
+class ATargetPoint;
 class UAudioComponent;
 class UBoxComponent;
 class UCurveFloat;
@@ -51,6 +52,20 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Scripted Rock")
 	TObjectPtr<USceneComponent> ImpactAnchor;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Markers")
+	TObjectPtr<ATargetPoint> FlightStartMarker;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Markers")
+	TObjectPtr<ATargetPoint> FlightImpactMarker;
+
+	/** World-space offset from the assigned start marker to the rock mesh pivot. */
+	UPROPERTY(EditInstanceOnly, Category = "YIXI|Scripted Rock|Markers", meta = (Units = "cm"))
+	FVector StartMarkerOffset = FVector::ZeroVector;
+
+	/** World-space offset from the assigned impact marker to the rock mesh pivot. */
+	UPROPERTY(EditInstanceOnly, Category = "YIXI|Scripted Rock|Markers", meta = (Units = "cm"))
+	FVector ImpactMarkerOffset = FVector::ZeroVector;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Scripted Rock")
 	TObjectPtr<UStaticMeshComponent> RockMesh;

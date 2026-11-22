@@ -32,6 +32,15 @@ void AYIXIInteractionStoryCoordinator::BeginPlay()
 		return;
 	}
 
+	if (bExternalV3Only)
+	{
+		if (!V3Cinematic || V3Cinematic->GetLevel() != GetLevel())
+			StopStory(TEXT("the external V3 must belong to this Day level"));
+		else
+			SetStage(EYIXIInteractionStoryStage::Discovery);
+		return;
+	}
+
 	const AActor* RequiredActors[] = {
 		ClassroomDoor, CorridorAudio, RoadRock, BypassTrigger, Girl, ToyPickup, ReturnTrigger, AttackCue, DiscoveryTrigger
 	};
@@ -449,6 +458,24 @@ void AYIXIInteractionStoryCoordinator::HandleFixedStageExited(UPrimitiveComponen
 	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex)
 {
 	HandleDiscoveryExited(Cast<APawn>(OtherActor));
+}
+
+bool AYIXIInteractionStoryCoordinator::BeginExternalV3Presentation(AYIXIV3Cinematic* Source, APawn* Pawn, AActor* HeldToy)
+{
+	if (!bExternalV3Only || bEndingPlay || Stage != EYIXIInteractionStoryStage::Discovery ||
+		!IsValid(Source) || Source != V3Cinematic || Source->GetLevel() != GetLevel() ||
+		!IsValid(Pawn) || Pawn->GetWorld() != GetWorld() || !IsValid(HeldToy))
+		return false;
+	const APlayerController* Controller = Cast<APlayerController>(Pawn->GetController());
+	const UYIXIToyCarryComponent* Carry = UYIXIToyCarryComponent::FindForPawn(Pawn);
+	if (!Controller || !Controller->IsLocalController() || Controller->GetPawn() != Pawn ||
+		!Carry || Carry->GetCarryState() != EYIXIToyCarryState::HeldHand || Carry->GetToyActor() != HeldToy ||
+		HeldToy->GetAttachParentActor() != Pawn)
+		return false;
+	StoryPawn = Pawn;
+	PresentationToy = HeldToy;
+	SetStage(EYIXIInteractionStoryStage::V3Presentation);
+	return true;
 }
 
 int32 AYIXIInteractionStoryCoordinator::RequestV3Cut(APawn* Pawn, AActor* DroppedToy)

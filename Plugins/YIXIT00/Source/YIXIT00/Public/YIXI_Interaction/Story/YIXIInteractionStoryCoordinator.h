@@ -47,6 +47,11 @@ class YIXIT00_API AYIXIInteractionStoryCoordinator : public AActor
 
 public:
 	AYIXIInteractionStoryCoordinator();
+	bool BeginExternalV3Presentation(AYIXIV3Cinematic* Source, APawn* Pawn, AActor* HeldToy);
+
+	/** Day Level Blueprint still owns the story before D07. This instance handles only the V3 handoff. */
+	UPROPERTY(EditInstanceOnly, Category = "YIXI|Story|Cinematic")
+	bool bExternalV3Only = false;
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Story|Actors")
 	TObjectPtr<AYIXIDoubleDoor> ClassroomDoor;

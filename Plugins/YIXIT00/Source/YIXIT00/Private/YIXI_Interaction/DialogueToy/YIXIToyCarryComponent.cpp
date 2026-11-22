@@ -259,7 +259,7 @@ bool UYIXIToyCarryComponent::FindCinematicDropPose(const FTransform& GroundAncho
 	return IsDropPathClear(*Pawn, OutPose);
 }
 
-bool UYIXIToyCarryComponent::IsDropPathClear(const APawn& Pawn, const FTransform& WorldPose) const
+bool UYIXIToyCarryComponent::IsDropPathClear(const APawn& Pawn, const FTransform& WorldPose, bool bCheckPawnCollision) const
 {
 	UWorld* World = GetWorld();
 	if (!World || !GetToyActor() || !WorldPose.IsValid())
@@ -280,22 +280,25 @@ bool UYIXIToyCarryComponent::IsDropPathClear(const APawn& Pawn, const FTransform
 	const FVector DropCenter = WorldPose.GetLocation() + Rotation.RotateVector(Bounds.Origin * ToyScale);
 	const FCollisionShape Shape = MakeDropShape(Bounds, ToyScale);
 	const FCollisionQueryParams Query = MakeDropQuery(Pawn, *ToyActor);
-	if (World->OverlapBlockingTestByChannel(DropCenter, Rotation, DropTraceChannel, Shape, Query))
+	const auto IsChannelClear = [&](ECollisionChannel Channel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("YIXI toy destination occupied at %s"), *DropCenter.ToString());
-		return false;
-	}
-	if (!CurrentCenter.Equals(DropCenter, UE_KINDA_SMALL_NUMBER))
-	{
+		if (World->OverlapBlockingTestByChannel(DropCenter, Rotation, Channel, Shape, Query))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("YIXI toy destination occupied at %s"), *DropCenter.ToString());
+			return false;
+		}
 		FHitResult Hit;
-		if (World->SweepSingleByChannel(Hit, CurrentCenter, DropCenter, Rotation, DropTraceChannel, Shape, Query))
+		if (!CurrentCenter.Equals(DropCenter, UE_KINDA_SMALL_NUMBER)
+			&& World->SweepSingleByChannel(Hit, CurrentCenter, DropCenter, Rotation, Channel, Shape, Query))
 		{
 			UE_LOG(LogTemp, Warning, TEXT("YIXI toy remaining path blocked by %s / %s, distance %.4fcm"),
 				*GetNameSafe(Hit.GetActor()), *GetNameSafe(Hit.GetComponent()), Hit.Distance);
 			return false;
 		}
-	}
-	return true;
+		return true;
+	};
+	return IsChannelClear(DropTraceChannel)
+		&& (!bCheckPawnCollision || DropTraceChannel.GetValue() == ECC_Pawn || IsChannelClear(ECC_Pawn));
 }
 
 bool UYIXIToyCarryComponent::TryDropAt(const FTransform& WorldPose)
@@ -324,47 +327,57 @@ bool UYIXIToyCarryComponent::BeginCinematicDrop(const FTransform& LandingPose, f
 	return StartVerticalDrop(LandingPose, Duration, false);
 }
 
-bool UYIXIToyCarryComponent::BeginSequencedVerticalDrop(const FTransform& LandingPose, float Duration)
+bool UYIXIToyCarryComponent::BeginSequencedVerticalDrop(const FTransform& LandingPose, float Duration, AActor* RequiredFloor)
 {
-	return StartVerticalDrop(LandingPose, Duration, true);
+	return StartVerticalDrop(LandingPose, Duration, true, RequiredFloor);
 }
 
-bool UYIXIToyCarryComponent::FindVerticalCinematicLanding(FTransform& OutPose) const
+bool UYIXIToyCarryComponent::FindVerticalCinematicLanding(FTransform& OutPose, AActor* RequiredFloor,
+	double* OutSupportZ) const
 {
 	const APawn* Pawn = GetControlledPawn();
 	return !bEndingPlay && CarryState == EYIXIToyCarryState::HeldHand && IsValid(Pawn)
-		&& CarrierPawn.Get() == Pawn && GetToyActor() && ProjectBelowToy(*Pawn, ToyActor->GetActorTransform(), OutPose)
-		&& IsDropPathClear(*Pawn, OutPose);
+		&& CarrierPawn.Get() == Pawn && GetToyActor()
+		&& ProjectBelowToy(*Pawn, ToyActor->GetActorTransform(), OutPose, RequiredFloor, OutSupportZ)
+		&& IsDropPathClear(*Pawn, OutPose, RequiredFloor != nullptr);
 }
 
-bool UYIXIToyCarryComponent::ProjectBelowToy(const APawn& Pawn, const FTransform& ReleasePose, FTransform& OutPose) const
+bool UYIXIToyCarryComponent::ProjectBelowToy(const APawn& Pawn, const FTransform& ReleasePose, FTransform& OutPose,
+	const AActor* RequiredFloor, double* OutSupportZ) const
 {
 	const UStaticMesh* Mesh = ToyActor->GetStaticMeshComponent()->GetStaticMesh();
-	if (!Mesh || !ReleasePose.IsValid() || DropGroundSearchDistance <= 0.0f)
+	if (!Mesh || !ReleasePose.IsValid() || DropGroundSearchDistance <= 0.0f
+		|| (RequiredFloor && (!IsValid(RequiredFloor) || RequiredFloor->GetWorld() != GetWorld())))
 	{
 		return false;
 	}
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
 	const FVector Center = ReleasePose.TransformPosition(Bounds.Origin);
 	const FVector Below = Center - FVector(0, 0, DropGroundSearchDistance);
+	const ECollisionChannel GroundChannel = RequiredFloor ? ECC_Pawn : DropTraceChannel.GetValue();
 	FHitResult Hit;
-	if (!GetWorld()->SweepSingleByChannel(Hit, Center, Below, ReleasePose.GetRotation(), DropTraceChannel,
+	if (!GetWorld()->SweepSingleByChannel(Hit, Center, Below, ReleasePose.GetRotation(), GroundChannel,
 		MakeDropShape(Bounds, ReleasePose.GetScale3D()), MakeDropQuery(Pawn, *ToyActor))
-		|| Hit.bStartPenetrating || Hit.ImpactNormal.Z < 0.5 || Hit.Distance <= 0.4)
+		|| Hit.bStartPenetrating || Hit.Distance <= 0.4
+		|| Hit.ImpactNormal.Z < (RequiredFloor ? 0.7 : 0.5)
+		|| (RequiredFloor && Hit.GetActor() != RequiredFloor))
 	{
 		return false;
 	}
 	// Hit.Distance is the downward travel of the oriented mesh bounds, including signed pivot offset.
 	OutPose = ReleasePose;
 	OutPose.AddToTranslation(FVector(0, 0, -(Hit.Distance - 0.4)));
+	if (OutSupportZ) *OutSupportZ = Hit.ImpactPoint.Z;
 	return true;
 }
 
-bool UYIXIToyCarryComponent::StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence)
+bool UYIXIToyCarryComponent::StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence,
+	AActor* RequiredFloor)
 {
 	FTransform GroundPose;
-	if (!FMath::IsFinite(Duration) || Duration <= 0.0f || !FindVerticalCinematicLanding(GroundPose)
+	if (!FMath::IsFinite(Duration) || Duration <= 0.0f || !FindVerticalCinematicLanding(GroundPose, RequiredFloor)
 		|| !GroundPose.GetLocation().Equals(LandingPose.GetLocation(), 2.0)
+		|| !GroundPose.GetRotation().Equals(LandingPose.GetRotation(), 1.e-4)
 		|| ToyActor->GetStaticMeshComponent()->IsSimulatingPhysics())
 	{
 		return false;
@@ -386,6 +399,7 @@ bool UYIXIToyCarryComponent::StartVerticalDrop(const FTransform& LandingPose, fl
 	DropProgress = 0.0f;
 	bSequenceControlsDrop = bFromSequence;
 	CinematicDropPawn = Pawn;
+	CinematicDropFloor = RequiredFloor;
 	ToyActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	SetComponentTickEnabled(!bFromSequence);
 	SetCarryState(Pawn, EYIXIToyCarryState::Falling);
@@ -420,7 +434,8 @@ bool UYIXIToyCarryComponent::MoveVerticalDrop(float Alpha)
 {
 	const APawn* Pawn = GetControlledPawn();
 	if (bEndingPlay || CarryState != EYIXIToyCarryState::Falling || !IsValid(Pawn) || CinematicDropPawn.Get() != Pawn
-		|| !GetToyActor() || ToyActor->GetAttachParentActor() || !FMath::IsFinite(Alpha))
+		|| !GetToyActor() || ToyActor->GetAttachParentActor() || !FMath::IsFinite(Alpha)
+		|| (!CinematicDropFloor.IsExplicitlyNull() && !CinematicDropFloor.IsValid()))
 	{
 		return false;
 	}
@@ -430,7 +445,7 @@ bool UYIXIToyCarryComponent::MoveVerticalDrop(float Alpha)
 	FVector Position = Pose.GetLocation();
 	Position.Z = FMath::Lerp(Position.Z, DropEndPose.GetLocation().Z, DropProgress);
 	Pose.SetLocation(Position);
-	return IsDropPathClear(*Pawn, Pose) && PlaceDetachedToy(*ToyActor, Pose);
+	return IsDropPathClear(*Pawn, Pose, !CinematicDropFloor.IsExplicitlyNull()) && PlaceDetachedToy(*ToyActor, Pose);
 }
 
 bool UYIXIToyCarryComponent::FinishCinematicDrop()
@@ -446,8 +461,11 @@ bool UYIXIToyCarryComponent::FinishCinematicDrop()
 	FTransform FloorProbe = DropEndPose;
 	FloorProbe.AddToTranslation(FVector(0, 0, 3.0));
 	FTransform FloorPose;
-	if (!IsDropPathClear(*Pawn, DropEndPose)) return false;
-	if (!ProjectBelowToy(*Pawn, FloorProbe, FloorPose) || !FloorPose.GetLocation().Equals(DropEndPose.GetLocation(), 0.25))
+	AActor* RequiredFloor = CinematicDropFloor.Get();
+	if (!IsDropPathClear(*Pawn, DropEndPose, !CinematicDropFloor.IsExplicitlyNull())) return false;
+	if ((!RequiredFloor && !CinematicDropFloor.IsExplicitlyNull())
+		|| !ProjectBelowToy(*Pawn, FloorProbe, FloorPose, RequiredFloor)
+		|| !FloorPose.GetLocation().Equals(DropEndPose.GetLocation(), 0.25))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("YIXI toy lost support at %s"), *DropEndPose.GetLocation().ToString());
 		return false;
@@ -460,6 +478,7 @@ bool UYIXIToyCarryComponent::FinishCinematicDrop()
 
 	SetComponentTickEnabled(false);
 	CarrierPawn.Reset();
+	CinematicDropFloor.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::Dropped);
 	return CarryState == EYIXIToyCarryState::Dropped && GetToyActor();
 }
@@ -493,6 +512,7 @@ bool UYIXIToyCarryComponent::RestoreToyToHand()
 	SetComponentTickEnabled(false);
 	CarrierPawn = Pawn;
 	CinematicDropPawn.Reset();
+	CinematicDropFloor.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::HeldHand);
 	return CarryState == EYIXIToyCarryState::HeldHand && GetToyActor();
 }
@@ -504,6 +524,18 @@ bool UYIXIToyCarryComponent::CanAttachToWaist() const
 	return !bEndingPlay && IsValid(Pawn) && Pawn->IsPlayerControlled() && Pawn->GetWorld() == GetWorld()
 		&& (CinematicDropPawn.IsExplicitlyNull() || CinematicDropPawn.Get() == Pawn)
 		&& GetToyActor() && FindAttachment(*Pawn, true, Attachment);
+}
+
+bool UYIXIToyCarryComponent::GetWaistPreviewTransform(FTransform& OutPose) const
+{
+	APawn* Pawn = GetControlledPawn();
+	FAttachment Attachment;
+	if (!Pawn || !CanAttachToWaist() || !FindAttachment(*Pawn, true, Attachment))
+		return false;
+	const FTransform Parent = Attachment.Parent->GetSocketTransform(Attachment.Socket);
+	OutPose = Attachment.RelativePose * Parent;
+	OutPose.SetScale3D(ToyBaseScale * Attachment.RelativePose.GetScale3D());
+	return OutPose.IsValid();
 }
 
 bool UYIXIToyCarryComponent::TryAttachToWaist()

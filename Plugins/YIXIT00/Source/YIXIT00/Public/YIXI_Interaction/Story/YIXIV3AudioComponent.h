@@ -40,6 +40,8 @@ public:
     void CommitNightMix();
     void RestoreDayMix();
     void EndNightPreview();
+    void CancelDayMix();
+    bool HasFinishedNightTail() const { return bCut && !IsComponentTickEnabled(); }
 
 protected:
     virtual void TickComponent(float DeltaSeconds, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

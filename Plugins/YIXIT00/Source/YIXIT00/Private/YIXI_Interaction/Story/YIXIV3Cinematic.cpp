@@ -1,9 +1,12 @@
 #include "YIXI_Interaction/Story/YIXIV3Cinematic.h"
 #include "YIXI_Interaction/Story/YIXIInteractionStoryCoordinator.h"
 #include "YIXI_Interaction/Story/YIXIV3AudioComponent.h"
+#include "YIXI_Interaction/DialogueToy/YIXIStoryGirl.h"
+#include "YIXI_Interaction/DialogueToy/YIXIStoryToyPickup.h"
 #include "YIXI_Interaction/DialogueToy/YIXIToyCarryComponent.h"
 #include "YIXI_Interaction/ScriptedProjectile/YIXIScriptedRock.h"
 #include "YIXI_Interaction/YIXIInteractorComponent.h"
+#include "YIXIT00TransitionController.h"
 #include "CineCameraActor.h"
 #include "CineCameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
@@ -14,7 +17,9 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DefaultMovementSet/InstantMovementEffects/BasicInstantMovementEffects.h"
+#include "Engine/BlockingVolume.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/GameplayCameraComponent.h"
 #include "GameFramework/Pawn.h"
@@ -30,6 +35,7 @@
 #include "YIXI_Interaction/Story/YIXIV3NeutralInput.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogYIXIV3, Log, All);
 
@@ -104,6 +110,8 @@ AYIXIV3Cinematic::AYIXIV3Cinematic()
     RockFocusMarker->SetupAttachment(StageRoot);
     HandCameraMarker=CreateDefaultSubobject<USceneComponent>(TEXT("HandCameraMarker"));
     HandCameraMarker->SetupAttachment(StageRoot);
+    ToyLandingMarker=CreateDefaultSubobject<UArrowComponent>(TEXT("ToyLandingMarker"));
+    ToyLandingMarker->SetupAttachment(StageRoot);
     StageTrigger=CreateDefaultSubobject<UBoxComponent>(TEXT("StageTrigger"));
     StageTrigger->SetupAttachment(StageRoot);
     StageTrigger->InitBoxExtent(FVector(30,30,110));
@@ -133,7 +141,110 @@ void AYIXIV3Cinematic::BeginPlay()
 {
     Super::BeginPlay();
     if (bUseFixedStage) StageTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-    ShowNight(false);
+    if (!UsesDayBindings())
+    {
+        ShowNight(false);
+        return;
+    }
+    if (!bUseFixedStage || !IsValid(DayPreviewPickup) || !IsValid(DayPreviewRock) || !IsValid(DayPreviewGirl) ||
+        DayPreviewPickup->GetWorld()!=GetWorld() || DayPreviewRock->GetWorld()!=GetWorld() ||
+        DayPreviewGirl->GetWorld()!=GetWorld())
+    {
+        UE_LOG(LogYIXIV3,Warning,TEXT("DAY_PREVIEW needs a fixed stage and the formal pickup, rock and girl in the same world."));
+        return;
+    }
+    DayPreviewPickup->OnToyPickedUp.AddUniqueDynamic(this,&AYIXIV3Cinematic::HandleDayPreviewPickup);
+}
+
+AYIXIT00TransitionController* AYIXIV3Cinematic::FindFormalTransition() const
+{
+    AYIXIT00TransitionController* Found=nullptr;
+    for (TActorIterator<AYIXIT00TransitionController> It(GetWorld()); It; ++It)
+    {
+        if (!It->bUseFormalStoryTransition || It->GetLevel()!=GetWorld()->PersistentLevel) continue;
+        if (Found) return nullptr;
+        Found=*It;
+    }
+    return Found;
+}
+
+UYIXIV3AudioComponent* AYIXIV3Cinematic::PresentationAudio() const
+{
+    const auto* Transition=FormalTransition.Get();
+    return FormalStory ? (Transition ? Transition->FormalAudio.Get() : nullptr) : Audio.Get();
+}
+
+void AYIXIV3Cinematic::HandleDayPreviewPickup(APawn* PickingPawn)
+{
+    if (bDayPreviewConsumed || DayPreviewPawn.IsValid() || !IsValid(PickingPawn) ||
+        PickingPawn->GetWorld()!=GetWorld()) return;
+    const auto* Controller=Cast<APlayerController>(PickingPawn->GetController());
+    const auto* PickupCarry=UYIXIToyCarryComponent::FindForPawn(PickingPawn);
+    if (!IsValid(Controller) || !Controller->IsLocalController() || Controller->GetPawn()!=PickingPawn ||
+        !IsValid(PickupCarry) || PickupCarry->GetCarryState()!=EYIXIToyCarryState::HeldHand) return;
+    AActor* PickedToy=PickupCarry->GetToyActor();
+    if (!IsValid(PickedToy) || PickedToy->GetAttachParentActor()!=PickingPawn) return;
+
+    DayPreviewPawn=PickingPawn;
+    DayPreviewToy=PickedToy;
+    GetWorldTimerManager().SetTimer(DayPreviewRetryTimer,this,&AYIXIV3Cinematic::TryPendingDayPreview,.15f,true);
+}
+
+void AYIXIV3Cinematic::TryPendingDayPreview()
+{
+    APawn* Participant=DayPreviewPawn.Get();
+    AActor* PickedToy=DayPreviewToy.Get();
+    if (bDayPreviewConsumed || !IsValid(Participant) || !IsValid(PickedToy) ||
+        !IsValid(DayPreviewRock) || !IsValid(DayPreviewGirl))
+    {
+        GetWorldTimerManager().ClearTimer(DayPreviewRetryTimer);
+        return;
+    }
+    if (Shot!=EYIXIV3Shot::Idle || bClosing) return;
+
+    const bool bOverlapping=StageTrigger->IsOverlappingActor(Participant);
+    if (bDayPreviewRequiresExit)
+    {
+        // Mover can transiently drop overlap pairs while restoring the same position.
+        const FVector Local=StageTrigger->GetComponentTransform().InverseTransformPosition(Participant->GetActorLocation());
+        if (!bOverlapping && !FBox::BuildAABB(FVector::ZeroVector,StageTrigger->GetUnscaledBoxExtent()).IsInsideOrOn(Local))
+            bDayPreviewRequiresExit=false;
+        return;
+    }
+    if (!DayPreviewRock->HasImpacted() || DayPreviewRock->GetActiveRequestId()!=2 ||
+        DayPreviewGirl->GetRequestState()!=EYIXIStoryGirlState::Unavailable) return;
+
+    const auto* Controller=Cast<APlayerController>(Participant->GetController());
+    const auto* PickupCarry=UYIXIToyCarryComponent::FindForPawn(Participant);
+    if (!IsValid(Controller) || !Controller->IsLocalController() || Controller->GetPawn()!=Participant ||
+        !IsValid(PickupCarry) || PickupCarry->GetToyActor()!=PickedToy ||
+        PickupCarry->GetCarryState()!=EYIXIToyCarryState::HeldHand || PickedToy->GetAttachParentActor()!=Participant) return;
+
+    if (FormalStory)
+    {
+        if (!FormalTransition.IsValid()) FormalTransition=FindFormalTransition();
+        auto* Transition=FormalTransition.Get();
+        if (!Transition || !Transition->RequestFormalNight(Participant))
+        {
+            if (bOverlapping && Transition && Transition->HasFormalNightFailed())
+            {
+                Transition->CancelFormalNight(Participant,true);
+                bDayPreviewRequiresExit=true;
+            }
+            return;
+        }
+    }
+    if (!bOverlapping || !CanEnterFixedStage(Participant)) return;
+    if (FormalStory && !FormalStory->BeginExternalV3Presentation(this,Participant,PickedToy)) return;
+    if (!BeginPresentation(FormalStory.Get(),Participant))
+    {
+        if (FormalStory)
+        {
+            FormalStory->AbortV3Presentation(Participant);
+            if (auto* Transition=FormalTransition.Get()) Transition->CancelFormalNight(Participant,true);
+        }
+        bDayPreviewRequiresExit=true;
+    }
 }
 
 void AYIXIV3Cinematic::ShowNight(bool bVisible)
@@ -149,9 +260,15 @@ void AYIXIV3Cinematic::ShowNight(bool bVisible)
 
 void AYIXIV3Cinematic::PrepareNight(AYIXIInteractionStoryCoordinator* Sender, APawn* Participant)
 {
-    if (!IsValid(Sender) || !IsValid(Participant) || Sender->GetWorld()!=GetWorld() || Participant->GetWorld()!=GetWorld()) return;
+    if (UsesDayBindings() || !IsValid(Sender) || !IsValid(Participant) ||
+        Sender->GetWorld()!=GetWorld() || Participant->GetWorld()!=GetWorld()) return;
     Audio->BeginDayMix();
     // The preview set lives in the persistent sandbox. T01 owns streaming in a formal map.
+    PrepareSequence();
+}
+
+void AYIXIV3Cinematic::PrepareSequence()
+{
     if (Sequence && !Player)
     {
         FMovieSceneSequencePlaybackSettings Settings;
@@ -191,22 +308,57 @@ void AYIXIV3Cinematic::HandleAttackImpact(AYIXIScriptedRock* Rock)
         UNiagaraFunctionLibrary::SpawnSystemAtLocation(this,DustEffect,Rock->RockMesh->GetComponentLocation());
 }
 
-bool AYIXIV3Cinematic::ClearCameraPath(FVector Start, FVector End) const
+bool AYIXIV3Cinematic::ClearCameraPath(FVector Start, FVector End, bool bToyRail) const
 {
     FCollisionQueryParams Q(SCENE_QUERY_STAT(YIXIV3Camera),false,this);
     Q.AddIgnoredActor(Pawn); Q.AddIgnoredActor(Toy);
+    if (bToyRail)
+    {
+        for (const ABlockingVolume* Volume : ToyCameraFloorVolumes)
+        {
+            if (IsValid(Volume) && Volume->GetLevel()==GetLevel()) Q.AddIgnoredActor(Volume);
+        }
+    }
     return !GetWorld()->SweepTestByChannel(Start,End,FQuat::Identity,ECC_Camera,FCollisionShape::MakeSphere(5.f),Q);
 }
 
 bool AYIXIV3Cinematic::ClearToySight(FVector Subject, FVector Eye) const
 {
     // The story rock can intentionally have no camera collision. It still occludes the image.
-    if (Story && Story->AttackCue && Story->AttackCue->RockMesh)
+    const AYIXIScriptedRock* RockActor=UsesDayBindings() ? DayPreviewRock.Get() : (Story ? Story->AttackCue.Get() : nullptr);
+    if (IsValid(RockActor) && RockActor->RockMesh)
     {
-        const FBox Rock=Story->AttackCue->RockMesh->Bounds.GetBox().ExpandBy(3.);
+        const FBox Rock=RockActor->RockMesh->Bounds.GetBox().ExpandBy(3.);
         if (Rock.IsInsideOrOn(Eye) || FMath::LineBoxIntersection(Rock,Subject,Eye,Eye-Subject)) return false;
     }
-    return ClearCameraPath(Subject,Eye);
+    return ClearCameraPath(Subject,Eye,true);
+}
+
+bool AYIXIV3Cinematic::ResolveToyLanding(FTransform& Landing)
+{
+    auto Reject = [this](const TCHAR* Reason)
+    {
+        if (!bReportedToyLandingIssue)
+        {
+            UE_LOG(LogYIXIV3, Warning, TEXT("TOY_LANDING_REJECTED %s: %s"), *GetName(), Reason);
+            bReportedToyLandingIssue=true;
+        }
+        return false;
+    };
+    if ((UsesDayBindings() || bUseToyLandingMarker) && !IsValid(ToyLandingSurface))
+        return Reject(TEXT("assign the courtyard floor to Toy Landing Surface"));
+
+    double SupportZ=0.0;
+    if (!Carry->FindVerticalCinematicLanding(Landing,ToyLandingSurface.Get(),&SupportZ))
+        return Reject(TEXT("the vertical drop has no clear path to the assigned floor"));
+
+    if (bUseToyLandingMarker)
+    {
+        const FVector Marker=ToyLandingMarker->GetComponentLocation();
+        if (FVector::Dist2D(Marker,Landing.GetLocation())>30.0 || FMath::Abs(Marker.Z-SupportZ)>3.0)
+            return Reject(TEXT("Toy Landing Marker conflicts with the toy's vertical projection or the floor height"));
+    }
+    return true;
 }
 
 bool AYIXIV3Cinematic::PrepareHandRail()
@@ -214,7 +366,7 @@ bool AYIXIV3Cinematic::PrepareHandRail()
     FVector Center, Extent;
     Toy->GetActorBounds(false,Center,Extent);
     FTransform Landing;
-    if (!Carry->FindVerticalCinematicLanding(Landing)) return false;
+    if (!ResolveToyLanding(Landing)) return false;
     // Keep the camera on the same vertical rail from the shoulder to the floor insert.
     const double Lateral=FVector::Dist2D(ShoulderView.Location,Center);
     const double Slope=DayToyCameraOffset.Z/FMath::Max(1.,DayToyCameraOffset.Size2D());
@@ -225,9 +377,9 @@ bool AYIXIV3Cinematic::PrepareHandRail()
     HandToyCenter=Center;
     HandEye=bUseFixedStage ? HandCameraMarker->GetComponentLocation() :
         FVector(ShoulderView.Location.X,ShoulderView.Location.Y,Center.Z+HandRailHeight);
-    if (!ClearCameraPath(ShoulderView.Location,HandEye)) return false;
+    if (!ClearCameraPath(ShoulderView.Location,HandEye,true)) return false;
     const FVector FloorDelta=Landing.GetLocation()-Toy->GetActorLocation();
-    if (!ClearCameraPath(HandEye,HandEye+FloorDelta)) return false;
+    if (!ClearCameraPath(HandEye,HandEye+FloorDelta,true)) return false;
     for (int32 Step=0; Step<=4; ++Step)
     {
         const FVector Delta=FloorDelta*(Step*.25);
@@ -270,7 +422,7 @@ bool AYIXIV3Cinematic::UpdateDropCamera()
     if (!bSkip)
     {
         const FVector PreviousEye=CameraActor->GetActorLocation();
-        if (!ClearCameraPath(PreviousEye,View.Location) || !ClearToySight(Center,View.Location)) return false;
+        if (!ClearCameraPath(PreviousEye,View.Location,true) || !ClearToySight(Center,View.Location)) return false;
         // The scene sweep ignores the pawn, so check its capsule separately.
         if (const UCapsuleComponent* Capsule=Pawn->FindComponentByClass<UCapsuleComponent>())
         {
@@ -486,15 +638,23 @@ void AYIXIV3Cinematic::UpdateStageAlignment(float Delta)
 
 bool AYIXIV3Cinematic::BeginDiscovery(AYIXIInteractionStoryCoordinator* Sender, APawn* Participant)
 {
-    if (Shot!=EYIXIV3Shot::Idle || bClosing || !IsValid(Sender) || !IsValid(Participant) ||
-        Sender->GetWorld()!=GetWorld() || Participant->GetWorld()!=GetWorld() ||
+    return !UsesDayBindings() && BeginPresentation(Sender,Participant);
+}
+
+bool AYIXIV3Cinematic::BeginPresentation(AYIXIInteractionStoryCoordinator* Sender, APawn* Participant)
+{
+    if (Shot!=EYIXIV3Shot::Idle || bClosing || !IsValid(Participant) || Participant->GetWorld()!=GetWorld() ||
+        (!bDayOnlyPreview && (!IsValid(Sender) || Sender->GetWorld()!=GetWorld())) ||
         (bUseFixedStage && !CanEnterFixedStage(Participant))) return false;
     Story=Sender; Pawn=Participant; PC=Cast<APlayerController>(Pawn->GetController());
     Carry=UYIXIToyCarryComponent::FindForPawn(Pawn);
     Toy=Carry ? Carry->GetToyActor() : nullptr;
-    PrepareNight(Sender,Participant);
-    if (!PC || !PC->IsLocalController() || !PC->PlayerCameraManager || !IsValid(Toy) || !Carry->CanAttachToWaist() ||
-        !IsValid(Story->AttackCue) || !ReadTimeline() || !NightDestination(GoalLocation))
+    if (UsesDayBindings()) PrepareSequence();
+    else PrepareNight(Sender,Participant);
+    auto* Mix=PresentationAudio();
+    if (!PC || !PC->IsLocalController() || !PC->PlayerCameraManager || !IsValid(Toy) || !Mix || !ReadTimeline() ||
+        (!bDayOnlyPreview && !Carry->CanAttachToWaist()) ||
+        (!UsesDayBindings() && (!IsValid(Story->AttackCue) || !NightDestination(GoalLocation))))
     {
         UE_LOG(LogYIXIV3,Warning,TEXT("Cannot start: check sequence markers/binding, night floor, carry sockets and drop path."));
         return false;
@@ -545,9 +705,10 @@ bool AYIXIV3Cinematic::BeginDiscovery(AYIXIInteractionStoryCoordinator* Sender, 
         SetMoverVelocity(*Mover,FVector::ZeroVector);
     }
     bMoved=false; bCut=false; bSkip=false; SkipHeld=0; Waiting=0;
+    bReportedToyLandingIssue=false;
     Sample(0);
     Camera(EntryView);
-    Audio->BeginDayMix();
+    Mix->BeginDayMix();
     SetActorTickEnabled(true);
     if (bUseFixedStage)
     {
@@ -715,12 +876,39 @@ void AYIXIV3Cinematic::InterruptPresentation()
     if (Shot!=EYIXIV3Shot::Idle) Close(bCut,TEXT("interrupted"));
 }
 
+bool AYIXIV3Cinematic::ValidateFormalNightCamera() const
+{
+    FTransform WaistPose;
+    const auto* Mesh=Toy->FindComponentByClass<UStaticMeshComponent>();
+    if (!Mesh || !Mesh->GetStaticMesh() || !Carry->GetWaistPreviewTransform(WaistPose)) return false;
+    const FVector Center=WaistPose.TransformPosition(Mesh->GetStaticMesh()->GetBounds().Origin);
+    FVector Rear=NightCloseupDirection;
+    Rear.X=FMath::Min(-.25,Rear.X);
+    const float Yaw=Pawn->GetActorRotation().Yaw;
+    const FVector Eye=Center+FRotator(0,Yaw,0).RotateVector(Rear.GetSafeNormal())*CloseupDistance;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(YIXIFormalWaistSight),false,this);
+    Query.AddIgnoredActor(Pawn);
+    Query.AddIgnoredActor(Toy);
+    FHitResult Hit;
+    // The waist insert must have both camera clearance and a sightline before the toy is committed.
+    return ClearCameraPath(Center,Eye) &&
+        !GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query);
+}
+
 void AYIXIV3Cinematic::Tick(float Delta)
 {
     Super::Tick(Delta);
     if (bClosing || Shot==EYIXIV3Shot::Idle) return;
-    if (!IsValid(Story) || !IsValid(PC) || !IsValid(Pawn) || PC->GetPawn()!=Pawn || !IsValid(Toy)
-        || !IsValid(Carry) || Carry->GetToyActor()!=Toy || !IsValid(Player) || !IsValid(CameraActor))
+    if (Shot==EYIXIV3Shot::ReturningToDay)
+    {
+        if (!IsValid(Pawn) || !IsValid(PC) || PC->GetPawn()!=Pawn ||
+            Pawn->GetActorLocation().Equals(DayPawnPose.GetLocation(),10.) || (Waiting+=Delta)>2.f)
+            Close(false,TEXT("formal cut rollback"));
+        return;
+    }
+    auto* Mix=PresentationAudio();
+    if ((!bDayOnlyPreview && !IsValid(Story)) || !IsValid(PC) || !IsValid(Pawn) || PC->GetPawn()!=Pawn || !IsValid(Toy)
+        || !IsValid(Carry) || Carry->GetToyActor()!=Toy || !IsValid(Player) || !IsValid(CameraActor) || !Mix)
     { Close(bCut,TEXT("presentation participant or owned resource changed")); return; }
     SkipHeld=PC->IsInputKeyDown(EKeys::SpaceBar) ? SkipHeld+Delta : 0;
     if (SkipHeld>=.65f) RequestSkip();
@@ -777,8 +965,9 @@ void AYIXIV3Cinematic::Tick(float Delta)
         Camera(ToyView(false));
         if (SequenceSeconds>=ReleaseAt)
         {
-            if (!NightDestination(GoalLocation) || !Carry->FindVerticalCinematicLanding(FloorPose) || !PrepareDropCamera() ||
-                !Carry->BeginSequencedVerticalDrop(FloorPose,LandedAt-ReleaseAt))
+            if ((!UsesDayBindings() && !NightDestination(GoalLocation)) ||
+                !ResolveToyLanding(FloorPose) || !PrepareDropCamera() ||
+                !Carry->BeginSequencedVerticalDrop(FloorPose,LandedAt-ReleaseAt,ToyLandingSurface.Get()))
             { Close(false,TEXT("drop path or night landing invalid")); return; }
             SetShot(EYIXIV3Shot::Fall);
         }
@@ -806,7 +995,7 @@ void AYIXIV3Cinematic::Tick(float Delta)
         }
         else
         {
-            if (!bNightPreviewReady || !Carry->CanAttachToWaist())
+            if (!bDayOnlyPreview && ((!FormalStory && !bNightPreviewReady) || !Carry->CanAttachToWaist()))
             { Close(false,TEXT("night readiness lost during the floor slide")); return; }
             if (Carry->GetCarryState()!=EYIXIToyCarryState::Dropped ||
                 !Toy->GetActorLocation().Equals(FloorPose.GetLocation(),.2) ||
@@ -825,7 +1014,8 @@ void AYIXIV3Cinematic::Tick(float Delta)
     }
     case EYIXIV3Shot::Hold:
     {
-        if (!bNightPreviewReady || !Carry->CanAttachToWaist() || Carry->GetCarryState()!=EYIXIToyCarryState::Dropped)
+        if ((!bDayOnlyPreview && ((!FormalStory && !bNightPreviewReady) || !Carry->CanAttachToWaist())) ||
+            Carry->GetCarryState()!=EYIXIToyCarryState::Dropped)
         { Close(false,TEXT("readiness lost during the floor hold")); return; }
         const float HoldDuration=CutAt-StableAt;
         const float HoldTime=GetWorld()->GetTimeSeconds()-HoldGameStart;
@@ -833,38 +1023,65 @@ void AYIXIV3Cinematic::Tick(float Delta)
         Sample(CutNow ? CutAt : StableAt+HoldTime);
         Camera(FloorView);
         const float Lead=FMath::Min(FMath::Max(EchoLeadSeconds,.05f),HoldDuration);
-        Audio->SetDayEcho(bSkip ? 1.f : FMath::Clamp((HoldTime-HoldDuration+Lead)/Lead,0.f,1.f));
+        Mix->SetDayEcho(bSkip ? 1.f : FMath::Clamp((HoldTime-HoldDuration+Lead)/Lead,0.f,1.f));
         if (!CutNow) break;
+        if (bDayOnlyPreview)
+        {
+            bDayPreviewConsumed=true;
+            GetWorldTimerManager().ClearTimer(DayPreviewRetryTimer);
+            UE_LOG(LogYIXIV3,Display,TEXT("DAY_PREVIEW_COMPLETE hold=%.3f skipped=%d"),HoldTime,bSkip);
+            Close(false,TEXT("day preview complete"));
+            return;
+        }
+        auto* Transition=FormalTransition.Get();
+        if (FormalStory && (!Transition || Transition->HasFormalNightFailed()))
+        { Close(false,TEXT("formal Night preparation failed")); return; }
         // Relocate only after the full hold to keep the real feet and their shadows in the floor shot.
         if (!bMoved)
         {
+            if (Transition)
+            {
+                if (!Transition->GetFormalLanding(Pawn,FormalNightPose))
+                {
+                    if (HoldTime>HoldDuration+Transition->StreamingTimeoutSeconds)
+                        Close(false,TEXT("formal Night landing never became ready"));
+                    return;
+                }
+                GoalLocation=FormalNightPose.GetLocation();
+            }
+            else if (!NightDestination(GoalLocation))
+            { Close(false,TEXT("night destination unavailable")); return; }
             DayPawnPose=Pawn->GetActorTransform();
-            const FRotator NightRotation=NightLanding->GetComponentRotation();
+            const FRotator NightRotation=Transition ? FormalNightPose.Rotator() : NightLanding->GetComponentRotation();
             if (CinematicInput)
             {
                 CinematicInput->MoveVelocity=FVector::ZeroVector;
                 CinematicInput->Facing=FRotator(0,NightRotation.Yaw,0).Vector();
             }
-            if (!NightDestination(GoalLocation) || !MoveParticipant(FTransform(NightRotation,GoalLocation)))
+            if (!MoveParticipant(FTransform(NightRotation,GoalLocation)))
             { Close(false,TEXT("night destination unavailable")); return; }
             bMoved=true;
         }
-        if (FVector::Dist(Pawn->GetActorLocation(),GoalLocation)>10.f)
+        if (FVector::Dist(Pawn->GetActorLocation(),GoalLocation)>10.f ||
+            (Transition && FMath::Abs(FMath::FindDeltaAngleDegrees(Pawn->GetActorRotation().Yaw,FormalNightPose.Rotator().Yaw))>3.f))
         {
             if ((Waiting+=Delta)>1.f) Close(false,TEXT("night relocation failed"));
             return;
         }
+        if (Transition && (!ValidateFormalNightCamera() || !Transition->ApplyFormalCutLighting(Pawn)))
+        { Close(false,TEXT("formal Night waist camera or lighting is unsafe")); return; }
         const int32 Id=Story->RequestV3Cut(Pawn,Toy);
         if (Id<=0 || (Story->Stage!=EYIXIInteractionStoryStage::V3NightPresentation && !Story->CompleteMatchCut(Id,true))
             || Carry->GetToyActor()!=Toy || Carry->GetCarryState()!=EYIXIToyCarryState::AttachedAtWaist)
         { Close(false,TEXT("cut refused or waist attachment failed")); return; }
         bCut=true;
-        ShowNight(true);
+        if (Transition) Transition->CommitFormalCut(Pawn);
+        else ShowNight(true);
         CaptureWaistInsert();
         NightView=ToyView(true);
         Camera(NightView);
         PC->PlayerCameraManager->SetGameCameraCutThisFrame();
-        Audio->CommitNightMix();
+        Mix->CommitNightMix();
         SetShot(EYIXIV3Shot::Night);
         UE_LOG(LogYIXIV3,Display,TEXT("MATCH id=%d sameToy=%s waist=true holdGame=%.5f skip=%d"),Id,*Toy->GetPathName(),HoldTime,bSkip);
         break;
@@ -886,7 +1103,7 @@ void AYIXIV3Cinematic::Tick(float Delta)
             if (Progress>=BlendSeconds) RestoreWaistAttachment();
             else UpdateWaistInsert(FMath::SmoothStep(0.f,BlendSeconds,Progress));
         }
-        const FRotator Yaw(0,NightLanding->GetComponentRotation().Yaw,0);
+        const FRotator Yaw(0,FormalStory ? FormalNightPose.Rotator().Yaw : NightLanding->GetComponentRotation().Yaw,0);
         const FVector Position=Pawn->GetActorLocation();
         const FMinimalViewInfo Back=LookAt(Position+Yaw.RotateVector(PullbackOffset),Position+FVector(0,0,45),EntryView.FOV);
         FMinimalViewInfo V=Between(NightView,Back,FMath::Clamp(CameraTravel,0.f,1.f));
@@ -924,20 +1141,38 @@ void AYIXIV3Cinematic::BeginHandoff()
 void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
 {
     if (bClosing) return;
+    const bool bSamePawn=IsValid(Pawn) && IsValid(PC) && PC->GetPawn()==Pawn;
+    if (!bCompleted && FormalStory && bMoved && bSamePawn && !bEndingPresentationPlay && Shot!=EYIXIV3Shot::ReturningToDay)
+    {
+        if (CinematicInput)
+        {
+            CinematicInput->MoveVelocity=FVector::ZeroVector;
+            CinematicInput->Facing=DayPawnPose.Rotator().Vector();
+        }
+        if (MoveParticipant(DayPawnPose))
+        {
+            Waiting=0.f;
+            SetShot(EYIXIV3Shot::ReturningToDay);
+            return;
+        }
+    }
     TGuardValue<bool> Guard(bClosing,true);
     SetActorTickEnabled(false);
     RestoreWaistAttachment();
     ReleaseParticipantPose();
-    const bool bSamePawn=IsValid(Pawn) && IsValid(PC) && PC->GetPawn()==Pawn;
     if (!bCompleted)
     {
         if (IsValid(Story) && IsValid(Story->GirlAftermath)) Story->GirlAftermath->SetActorHiddenInGame(true);
-        if (bMoved && bSamePawn) MoveParticipant(DayPawnPose);
+        if (bMoved && bSamePawn && !FormalStory) MoveParticipant(DayPawnPose);
         if (IsValid(Carry) && bSamePawn && IsValid(Toy) && Carry->GetToyActor()==Toy &&
             Carry->GetCarryState()!=EYIXIToyCarryState::HeldHand)
             Carry->RestoreToyToHand();
-        ShowNight(false);
-        Audio->RestoreDayMix();
+        if (!UsesDayBindings()) ShowNight(false);
+        if (auto* Mix=PresentationAudio())
+        {
+            if (FormalStory) Mix->CancelDayMix();
+            else Mix->RestoreDayMix();
+        }
     }
     if (bSamePawn)
     {
@@ -968,11 +1203,32 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
     if (IsValid(Player)) Player->Stop();
     UE_LOG(LogYIXIV3,Display,TEXT("closed night=%d reason=%s view=%s controlRestored=%d"),bCompleted,Reason,
         IsValid(PC) ? *GetNameSafe(PC->GetViewTarget()) : TEXT("None"),bSamePawn);
+    if (UsesDayBindings())
+    {
+        bDayPreviewRequiresExit=!bDayPreviewConsumed;
+        const bool bToyRestored=IsValid(Carry) && Carry->GetToyActor()==Toy &&
+            Carry->GetCarryState()==EYIXIToyCarryState::HeldHand && IsValid(Toy) && Toy->GetAttachParentActor()==Pawn;
+        UE_LOG(LogYIXIV3,Display,TEXT("DAY_PREVIEW_CLOSED reason=%s toyRestored=%d"),Reason,bToyRestored);
+    }
     SetShot(EYIXIV3Shot::Idle);
     if (IsValid(Story) && !IsActorBeingDestroyed())
     {
         if (bCompleted) Story->FinishV3Presentation(Pawn);
         else Story->AbortV3Presentation(Pawn);
+    }
+    if (auto* Transition=FormalTransition.Get(); FormalStory && Transition && !bEndingPresentationPlay)
+    {
+        if (bCompleted)
+        {
+            bDayPreviewConsumed=true;
+            GetWorldTimerManager().ClearTimer(DayPreviewRetryTimer);
+            Transition->FinishFormalPresentation(Pawn);
+        }
+        else
+        {
+            const bool bSafeToUnload=!bMoved || (bSamePawn && Pawn->GetActorLocation().Equals(DayPawnPose.GetLocation(),10.));
+            Transition->CancelFormalNight(Pawn,bSafeToUnload);
+        }
     }
     PreviousView.Reset();
     Story=nullptr; PC=nullptr; Pawn=nullptr; Toy=nullptr; Interactor=nullptr; Carry=nullptr;
@@ -980,6 +1236,13 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
 
 void AYIXIV3Cinematic::EndPlay(EEndPlayReason::Type Reason)
 {
+    bEndingPresentationPlay=true;
+    if (UsesDayBindings())
+    {
+        GetWorldTimerManager().ClearTimer(DayPreviewRetryTimer);
+        if (IsValid(DayPreviewPickup))
+            DayPreviewPickup->OnToyPickedUp.RemoveDynamic(this,&AYIXIV3Cinematic::HandleDayPreviewPickup);
+    }
     if (Shot!=EYIXIV3Shot::Idle) Close(bCut,TEXT("end play"));
     if (IsValid(PlayerActor)) PlayerActor->Destroy();
     Super::EndPlay(Reason);

@@ -1,6 +1,7 @@
 #include "YIXIT00TransitionController.h"
 #include "YIXIT01FocusRig.h"
 #include "YIXIT01L01LightingRig.h"
+#include "YIXI_Interaction/Story/YIXIV3AudioComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
@@ -87,6 +88,7 @@ FString AYIXIT00TransitionController::InspectWorld(UWorld* World)
 AYIXIT00TransitionController::AYIXIT00TransitionController()
 {
     RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    FormalAudio = CreateDefaultSubobject<UYIXIV3AudioComponent>(TEXT("FormalAudio"));
     PrimaryActorTick.bCanEverTick = true;
     PrimaryActorTick.TickGroup = TG_PostUpdateWork; // Observe completed camera update, not only requested ViewTarget.
 }
@@ -232,20 +234,33 @@ bool AYIXIT00TransitionController::ApplySequenceLightingFrame(int32 Frame,FStrin
     if (!Player || !Scene || Scene->GetPossessableCount()==0 || Scene->GetSpawnableCount()!=0)
     { Reason=TEXT("T01 needs the existing initialized lighting SequencePlayer and local possessables"); return false; }
     TArray<TSharedPtr<FJsonValue>> Bindings;
+    bool bBoundSun=false, bBoundSky=false;
     for (int32 I=0;I<Scene->GetPossessableCount();++I)
     {
         const auto& P=Scene->GetPossessable(I);
         const FMovieSceneObjectBindingID ID(UE::MovieScene::FFixedObjectBindingID(P.GetGuid(),MovieSceneSequenceID::Root));
         const auto Objects=Player->GetBoundObjects(ID);
         if (Objects.Num()!=1 || !Objects[0] || Objects[0]->GetWorld()!=GetWorld())
-        { Reason=TEXT("T01 lighting binding is not unique and World-local: ")+P.GetName(); return false; }
+        {
+            // The formal sequence retains a retired diagnostic sun and its two component tracks.
+            const FMovieScenePossessable* Parent=Scene->FindPossessable(P.GetParent());
+            if (bUseFormalStoryTransition && Objects.IsEmpty() &&
+                (P.GetName()==TEXT("P02_DirectionalLight") || (Parent && Parent->GetName()==TEXT("P02_DirectionalLight"))))
+                continue;
+            Reason=TEXT("T01 lighting binding is not unique and World-local: ")+P.GetName();
+            return false;
+        }
         if (Objects[0]->IsA<AYIXIT01L01LightingRig>() || Objects[0]->GetTypedOuter<AYIXIT01L01LightingRig>())
         { Reason=TEXT("T01 lighting still targets a retired L01 rig: ")+P.GetName(); return false; }
         auto Item=MakeShared<FJsonObject>();
         Item->SetStringField(TEXT("binding"),P.GetName());
         Item->SetStringField(TEXT("target"),Objects[0]->GetPathName());
         Bindings.Add(MakeShared<FJsonValueObject>(Item));
+        bBoundSun |= Objects[0]->IsA<UDirectionalLightComponent>();
+        bBoundSky |= Objects[0]->IsA<USkyLightComponent>();
     }
+    if (bUseFormalStoryTransition && (!bBoundSun || !bBoundSky))
+    { Reason=TEXT("Formal lighting must bind both the active sun and skylight components"); return false; }
     auto Info=MakeShared<FJsonObject>();
     Info->SetStringField(TEXT("sequence"),Sequence->GetPathName());
     Info->SetArrayField(TEXT("bindings"),Bindings);
@@ -384,6 +399,7 @@ void AYIXIT00TransitionController::SetPawnFillLightVisible(bool bVisible)
 }
 void AYIXIT00TransitionController::TriggerTransition()
 {
+    if (bUseFormalStoryTransition) return;
     Event(TEXT("T00_TRIGGER_RECEIVED"));
     if (FocusState != EYIXIT01FocusState::Explore)
     { Event(TEXT("T00_DEBUG_IGNORED_DURING_INTERACTION")); return; }
@@ -438,6 +454,11 @@ void AYIXIT00TransitionController::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     const double Now = FPlatformTime::Seconds();
+    if (bUseFormalStoryTransition)
+    {
+        TickFormalTransition(Now);
+        return;
+    }
     if (Phase == EPhase::Done) return;
     if (bUsePhaseStreaming) TickP04Streaming(Now);
     if (Phase == EPhase::Done) return;
@@ -618,6 +639,11 @@ void AYIXIT00TransitionController::Finish(bool bFunctional, const FString& Reaso
 void AYIXIT00TransitionController::EndPlay(const EEndPlayReason::Type Reason)
 {
     bSessionEnding = true;
+    if (bUseFormalStoryTransition)
+    {
+        Super::EndPlay(Reason);
+        return;
+    }
     RestoreSequenceDiagnostics();
     if (Result.IsValid() && !bReportWritten) Finish(false,TEXT("Play ended before test report completed"));
     RestoreInput();

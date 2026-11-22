@@ -4,9 +4,12 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
+#include "SubtitleManager.h"
 #include "UObject/ConstructorHelpers.h"
 
 #define LOCTEXT_NAMESPACE "YIXIStoryGirl"
@@ -69,7 +72,7 @@ void AYIXIStoryGirl::SetUnavailable()
 bool AYIXIStoryGirl::HasAvailableDialogue() const
 {
 	return RequestState == EYIXIStoryGirlState::RequestReady
-		|| (RequestState == EYIXIStoryGirlState::Requested && IsValid(ReminderVoice));
+		|| RequestState == EYIXIStoryGirlState::Requested;
 }
 
 bool AYIXIStoryGirl::CanInteract_Implementation(APawn* Interactor) const
@@ -96,6 +99,18 @@ void AYIXIStoryGirl::Interact_Implementation(APawn* Interactor)
 	else if (RequestState == EYIXIStoryGirlState::Requested)
 	{
 		PlayVoice(ReminderVoice);
+		if (const APlayerController* Controller = Cast<APlayerController>(Interactor->GetController());
+			Controller && Controller->IsLocalController())
+		{
+			constexpr float ReminderDuration = 3.0f;
+			TArray<FSubtitleCue> Cues;
+			FSubtitleCue& Cue = Cues.AddDefaulted_GetRef();
+			Cue.Text = LOCTEXT("ReminderDialogue", "我把玩具落在后院了。");
+			Cue.Time = 0.0f;
+			FSubtitleManager::GetSubtitleManager()->QueueSubtitles(
+				reinterpret_cast<PTRINT>(this), 1.0f, false, true,
+				ReminderDuration, Cues, 0.0f, GetWorld()->GetAudioTimeSeconds());
+		}
 	}
 }
 

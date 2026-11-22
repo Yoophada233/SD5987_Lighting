@@ -8,6 +8,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Curves/CurveFloat.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/TargetPoint.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundAttenuation.h"
@@ -94,9 +95,26 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 		return false;
 	}
 
-	const FTransform Start = StartAnchor->GetComponentTransform();
-	const FTransform End = ImpactAnchor->GetComponentTransform();
-	const FTransform BlockageTransform = Blocker->GetComponentTransform();
+	if ((FlightStartMarker && (!IsValid(FlightStartMarker) || FlightStartMarker->GetWorld() != GetWorld()))
+		|| (FlightImpactMarker && (!IsValid(FlightImpactMarker) || FlightImpactMarker->GetWorld() != GetWorld())))
+	{
+		return false;
+	}
+
+	// Resolve authored markers at launch. Unbound rock instances still use their component anchors.
+	FTransform Start = StartAnchor->GetComponentTransform();
+	const FTransform AuthoredImpact = ImpactAnchor->GetComponentTransform();
+	FTransform End = AuthoredImpact;
+	FTransform BlockageTransform = Blocker->GetComponentTransform();
+	if (FlightStartMarker)
+	{
+		Start.SetLocation(FlightStartMarker->GetActorLocation() + StartMarkerOffset);
+	}
+	if (FlightImpactMarker)
+	{
+		End.SetLocation(FlightImpactMarker->GetActorLocation() + ImpactMarkerOffset);
+		BlockageTransform = BlockageTransform.GetRelativeTransform(AuthoredImpact) * End;
+	}
 	const FVector BlockageExtent = Blocker->GetScaledBoxExtent();
 	if (Start.ContainsNaN() || End.ContainsNaN()
 		|| (bEnableBlockageAfterImpact && (!GetActorEnableCollision()

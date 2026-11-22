@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Camera/CameraTypes.h"
+#include "Engine/TimerHandle.h"
 #include "GameFramework/Actor.h"
 #include "YIXIV3Cinematic.generated.h"
 
 class ACineCameraActor;
+class ABlockingVolume;
 class UBoxComponent;
 class UCapsuleComponent;
 class UCineCameraComponent;
@@ -15,14 +17,17 @@ class ULevelSequence;
 class ULevelSequencePlayer;
 class UNiagaraSystem;
 class AYIXIInteractionStoryCoordinator;
+class AYIXIT00TransitionController;
 class AYIXIScriptedRock;
+class AYIXIStoryGirl;
+class AYIXIStoryToyPickup;
 class UYIXIToyCarryComponent;
 class UYIXIV3AudioComponent;
 class UYIXIInteractorComponent;
 class UYIXIV3NeutralInput;
 
 UENUM(BlueprintType)
-enum class EYIXIV3Shot : uint8 { Idle, Shoulder, Hand, Fall, Hold, Night, Handoff, HandBlend, FloorReframe, StageAlign };
+enum class EYIXIV3Shot : uint8 { Idle, Shoulder, Hand, Fall, Hold, Night, Handoff, HandBlend, FloorReframe, StageAlign, ReturningToDay };
 
 /** Isolated day/night presentation. Story progression and ownership of the toy stay with their existing actors. */
 UCLASS(Blueprintable)
@@ -41,6 +46,16 @@ public:
 
     UPROPERTY(EditAnywhere, Category="V3") TObjectPtr<ULevelSequence> Sequence;
     UPROPERTY(EditInstanceOnly, Category="V3|Stage") bool bUseFixedStage=false;
+    /** Use the formal Day story's actor instances and release control after the daytime hold. */
+    UPROPERTY(EditInstanceOnly, Category="V3|Day Preview") bool bDayOnlyPreview=false;
+    /** Enables the Master-owned real Night while using the same formal Day pickup, rock and girl. */
+    UPROPERTY(EditInstanceOnly, Category="V3|Formal Transition") TObjectPtr<AYIXIInteractionStoryCoordinator> FormalStory;
+    UPROPERTY(EditInstanceOnly, Category="V3|Day Bindings")
+    TObjectPtr<AYIXIStoryToyPickup> DayPreviewPickup;
+    UPROPERTY(EditInstanceOnly, Category="V3|Day Bindings")
+    TObjectPtr<AYIXIScriptedRock> DayPreviewRock;
+    UPROPERTY(EditInstanceOnly, Category="V3|Day Bindings")
+    TObjectPtr<AYIXIStoryGirl> DayPreviewGirl;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage") TObjectPtr<USceneComponent> StageRoot;
     /** Place this marker on the ground and point its X axis along the desired player facing. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage") TObjectPtr<USceneComponent> PlayerStandMarker;
@@ -48,6 +63,17 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage") TObjectPtr<USceneComponent> RockFocusMarker;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage") TObjectPtr<USceneComponent> HandCameraMarker;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage") TObjectPtr<UBoxComponent> StageTrigger;
+    /** Invisible gameplay floor volumes to exclude from the toy insert's camera sweeps and sightlines. */
+    UPROPERTY(EditInstanceOnly, Category="V3|Stage")
+    TArray<TObjectPtr<ABlockingVolume>> ToyCameraFloorVolumes;
+    /** Walkable surface the toy must hit beneath its release position. Required by the formal Day preview. */
+    UPROPERTY(EditInstanceOnly, Category="V3|Stage|Toy Landing")
+    TObjectPtr<AActor> ToyLandingSurface;
+    /** When enabled, the marker must agree with the support height and the toy's vertical projection. */
+    UPROPERTY(EditInstanceOnly, Category="V3|Stage|Toy Landing")
+    bool bUseToyLandingMarker = false;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="V3|Stage|Toy Landing")
+    TObjectPtr<USceneComponent> ToyLandingMarker;
     UPROPERTY(EditInstanceOnly, Category="V3|Stage", meta=(ClampMin="5",Units="cm")) float MaxStageEntryDistance=180.f;
     UPROPERTY(EditInstanceOnly, Category="V3|Stage", meta=(ClampMin="1",Units="cm")) float StagePositionTolerance=5.f;
     UPROPERTY(EditInstanceOnly, Category="V3|Stage", meta=(ClampMin="1",ClampMax="15",Units="deg")) float StageFacingTolerance=3.f;
@@ -90,13 +116,22 @@ protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(EEndPlayReason::Type Reason) override;
 private:
+    UFUNCTION() void HandleDayPreviewPickup(APawn* PickingPawn);
+    void TryPendingDayPreview();
+    bool UsesDayBindings() const { return bDayOnlyPreview || FormalStory!=nullptr; }
+    AYIXIT00TransitionController* FindFormalTransition() const;
+    UYIXIV3AudioComponent* PresentationAudio() const;
+    bool ValidateFormalNightCamera() const;
+    void PrepareSequence();
+    bool BeginPresentation(AYIXIInteractionStoryCoordinator* Sender, APawn* Participant);
     bool ReadTimeline();
-    bool ClearCameraPath(FVector Start, FVector End) const;
+    bool ClearCameraPath(FVector Start, FVector End, bool bToyRail=false) const;
     bool ClearToySight(FVector Subject, FVector Eye) const;
     bool ChooseShoulderView();
     bool ClearStageWalk(const APawn& Participant, const UCapsuleComponent& Capsule) const;
     bool PrepareStageCameraRoute(const UCapsuleComponent& Capsule);
     void UpdateStageAlignment(float Delta);
+    bool ResolveToyLanding(FTransform& Landing);
     bool PrepareHandRail();
     bool PrepareDropCamera();
     bool UpdateDropCamera();
@@ -128,7 +163,15 @@ private:
     UPROPERTY(Transient) TArray<TObjectPtr<UObject>> SavedMoverInputs;
     UPROPERTY(Transient) TObjectPtr<UYIXIV3NeutralInput> CinematicInput;
     TWeakObjectPtr<AActor> PreviousView;
+    TWeakObjectPtr<APawn> DayPreviewPawn;
+    TWeakObjectPtr<AActor> DayPreviewToy;
+    TWeakObjectPtr<AYIXIT00TransitionController> FormalTransition;
+    FTimerHandle DayPreviewRetryTimer;
+    bool bDayPreviewConsumed=false;
+    bool bDayPreviewRequiresExit=false;
+    bool bReportedToyLandingIssue=false;
     FTransform DayPawnPose, FloorPose;
+    FTransform FormalNightPose;
     FRotator DayControlRotation;
     FMinimalViewInfo EntryView, ShoulderView, DropStartView, FloorView, NightView;
     TOptional<FVector> StageCameraBend;
@@ -145,4 +188,5 @@ private:
     float Waiting=0, SkipHeld=0, HoldGameStart=0;
     float StageAlignmentTime=0, StageSettleTime=0;
     bool bInputHeld=false, bPawnInputWasEnabled=false, bWasSuppressed=false, bMoved=false, bCut=false, bSkip=false, bClosing=false;
+    bool bEndingPresentationPlay=false;
 };

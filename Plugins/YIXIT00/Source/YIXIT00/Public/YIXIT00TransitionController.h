@@ -7,6 +7,7 @@
 
 class ACameraActor;
 class APawn;
+class AGameModeBase;
 class APlayerController;
 class UCapsuleComponent;
 class UMoverComponent;
@@ -24,6 +25,7 @@ class ULightComponentBase;
 class SWidget;
 class IInputProcessor;
 class ULevelStreaming;
+class UYIXIV3AudioComponent;
 
 UENUM(BlueprintType)
 enum class EYIXIT01FocusState : uint8
@@ -31,7 +33,7 @@ enum class EYIXIT01FocusState : uint8
     Explore, FocusEnter, FocusHold, MatchCut, FocusExit, ExploreNight, FocusReturn, Failed
 };
 
-// No editor-Python runtime dependency. No Level load/unload calls in this Actor.
+// Native owner of the Master streaming levels.
 UCLASS(Blueprintable)
 class YIXIT00_API AYIXIT00TransitionController : public AActor
 {
@@ -61,6 +63,20 @@ public:
     UPROPERTY(EditInstanceOnly, Category="P04|Streaming") FName DayStreamingLevel = TEXT("L_YIXI_T00_Day");
     UPROPERTY(EditInstanceOnly, Category="P04|Streaming") FName NightStreamingLevel = TEXT("L_YIXI_T00_Night");
     UPROPERTY(EditAnywhere, Category="P04|Streaming", meta=(ClampMin="5")) float StreamingTimeoutSeconds = 30.f;
+
+    UPROPERTY(EditInstanceOnly, Category="P04|Formal Transition") bool bUseFormalStoryTransition = false;
+    UPROPERTY(EditInstanceOnly, Category="P04|Formal Transition") TSubclassOf<AGameModeBase> FormalGameMode;
+    UPROPERTY(EditInstanceOnly, Category="P04|Formal Transition") TSubclassOf<APlayerController> FormalController;
+    UPROPERTY(EditInstanceOnly, Category="P04|Formal Transition") TSubclassOf<APawn> FormalPawnClass;
+    UPROPERTY(EditInstanceOnly, Category="P04|Formal Transition") TObjectPtr<AActor> FormalDestination;
+    UPROPERTY(VisibleAnywhere, Category="P04|Formal Transition") TObjectPtr<UYIXIV3AudioComponent> FormalAudio;
+    bool RequestFormalNight(APawn* Participant);
+    bool HasFormalNightFailed() const { return bP04NightFailed; }
+    bool GetFormalLanding(const APawn* Participant, FTransform& OutPose) const;
+    bool ApplyFormalCutLighting(APawn* Participant);
+    void CommitFormalCut(APawn* Participant);
+    void FinishFormalPresentation(APawn* Participant);
+    void CancelFormalNight(APawn* Participant, bool bCanUnloadNight);
 private:
     enum class EPhase { Warming, Ready, Day, AwaitCut, Night, AwaitTeleport, Settling, AwaitRestore, Post, Done };
     EPhase Phase = EPhase::Warming;
@@ -147,6 +163,12 @@ private:
     int32 P04NightReadyFrames=0;
     double P04LoadAt=0, P04UnloadAt=0;
     FRenderCommandFence P04NightFence;
+    TWeakObjectPtr<APawn> FormalParticipant;
+    bool bFormalLightingReady=false, bFormalNightLighting=false;
+    bool bFormalCutCommitted=false, bFormalPresentationFinished=false;
+    bool ValidateFormalParticipant(APawn* Participant) const;
+    bool ProbeFormalLanding(const APawn* Participant, FTransform& OutPose) const;
+    void TickFormalTransition(double Now);
     UFUNCTION() void Teleported(const FVector& FromLocation, const FQuat& FromRotation,
                               const FVector& ToLocation, const FQuat& ToRotation);
 };

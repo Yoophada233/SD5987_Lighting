@@ -94,10 +94,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Toy|Cinematic")
 	bool FindCinematicDropPose(const FTransform& GroundAnchor, FTransform& OutPose) const;
 
-	bool FindVerticalCinematicLanding(FTransform& OutPose) const;
+	/** An authored floor uses pawn collision and must be the first valid hit beneath the toy. */
+	bool FindVerticalCinematicLanding(FTransform& OutPose, AActor* RequiredFloor = nullptr,
+		double* OutSupportZ = nullptr) const;
 
 	/** Sequencer supplies the monotonic progress. The component does not tick this drop. */
-	bool BeginSequencedVerticalDrop(const FTransform& LandingPose, float Duration);
+	bool BeginSequencedVerticalDrop(const FTransform& LandingPose, float Duration, AActor* RequiredFloor = nullptr);
 	bool ApplySequencedDropProgress(float Alpha);
 
 	/** Release the real hand prop and move it over game time to a validated landing pose. */
@@ -114,6 +116,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Toy")
 	bool CanAttachToWaist() const;
+	bool GetWaistPreviewTransform(FTransform& OutPose) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Toy")
 	bool TryAttachToWaist();
@@ -138,9 +141,10 @@ private:
 	bool TryPickup(APawn* Pawn, AYIXIStoryToyPickup& Pickup);
 	bool FindAttachment(APawn& Pawn, bool bWaist, FAttachment& OutAttachment) const;
 	bool AttachToy(AStaticMeshActor& Actor, const FAttachment& Attachment, const FVector& BaseScale) const;
-	bool IsDropPathClear(const APawn& Pawn, const FTransform& WorldPose) const;
-	bool ProjectBelowToy(const APawn& Pawn, const FTransform& ReleasePose, FTransform& OutPose) const;
-	bool StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence);
+	bool IsDropPathClear(const APawn& Pawn, const FTransform& WorldPose, bool bCheckPawnCollision = false) const;
+	bool ProjectBelowToy(const APawn& Pawn, const FTransform& ReleasePose, FTransform& OutPose,
+		const AActor* RequiredFloor, double* OutSupportZ = nullptr) const;
+	bool StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence, AActor* RequiredFloor = nullptr);
 	bool MoveVerticalDrop(float Alpha);
 	bool RestoreReleaseAttachment(APawn& Pawn);
 	void SetCarryState(APawn* Pawn, EYIXIToyCarryState NewState);
@@ -159,6 +163,7 @@ private:
 
 	TWeakObjectPtr<APawn> CarrierPawn;
 	TWeakObjectPtr<APawn> CinematicDropPawn;
+	TWeakObjectPtr<AActor> CinematicDropFloor;
 	TWeakObjectPtr<USceneComponent> ReleaseParent;
 	FName ReleaseSocket;
 	FTransform ReleaseRelativePose;
