@@ -1,4 +1,5 @@
 #include "YIXI_Interaction/Story/YIXIV3Cinematic.h"
+#include "YIXIFormalCutFrameHold.h"
 #include "YIXI_Interaction/Story/YIXIInteractionStoryCoordinator.h"
 #include "YIXI_Interaction/Story/YIXIV3AudioComponent.h"
 #include "YIXI_Interaction/DialogueToy/YIXIStoryGirl.h"
@@ -18,6 +19,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "DefaultMovementSet/InstantMovementEffects/BasicInstantMovementEffects.h"
 #include "Engine/BlockingVolume.h"
+#include "Engine/LevelStreaming.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
@@ -25,6 +27,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Kismet/GameplayStatics.h"
 #include "LevelSequence.h"
 #include "LevelSequenceActor.h"
 #include "LevelSequencePlayer.h"
@@ -705,6 +708,11 @@ bool AYIXIV3Cinematic::BeginPresentation(AYIXIInteractionStoryCoordinator* Sende
         SetMoverVelocity(*Mover,FVector::ZeroVector);
     }
     bMoved=false; bCut=false; bSkip=false; SkipHeld=0; Waiting=0;
+    FormalPoseDeadline=0;
+    StableWaistPose.Reset();
+    bLoggedDayRemaining=false;
+    bLoggedFormalFirstFrame=false;
+    bLoggedFormalMidpoint=false;
     bReportedToyLandingIssue=false;
     Sample(0);
     Camera(EntryView);
@@ -876,23 +884,189 @@ void AYIXIV3Cinematic::InterruptPresentation()
     if (Shot!=EYIXIV3Shot::Idle) Close(bCut,TEXT("interrupted"));
 }
 
-bool AYIXIV3Cinematic::ValidateFormalNightCamera() const
+USkeletalMeshComponent* AYIXIV3Cinematic::FindVisibleBody() const
 {
-    FTransform WaistPose;
+    if (!IsValid(Pawn) || Pawn->IsHidden()) return nullptr;
+    const AActor* ViewActor=IsValid(PC) ? PC->GetViewTarget() : nullptr;
+    USkeletalMeshComponent* Body=nullptr;
+    for (auto* Part : TInlineComponentArray<USkeletalMeshComponent*>(Pawn.Get()))
+    {
+        const bool bOwnerView=ViewActor && ViewActor->IsOwnedBy(Part->GetOwner());
+        if (Part->IsRegistered() && Part->ShouldRender() && Part->GetSkeletalMeshAsset() &&
+            !(bOwnerView && Part->bOwnerNoSee) && !(!bOwnerView && Part->bOnlyOwnerSee) &&
+            Part->DoesSocketExist(TEXT("pelvis")) && (!Body || Part->Bounds.SphereRadius>Body->Bounds.SphereRadius))
+            Body=Part;
+    }
+    return Body;
+}
+
+bool AYIXIV3Cinematic::UpdateFormalNightPose(FString& Reason)
+{
+    USceneComponent* Mount=nullptr;
+    FName Socket;
+    if (!Carry->GetWaistMount(Mount,Socket))
+    { Reason=TEXT("waist attachment is unavailable"); return false; }
+    auto* Mesh=Cast<USkeletalMeshComponent>(Mount);
+    if (!Mesh)
+        if (const auto* Mover=Pawn->FindComponentByClass<UMoverComponent>())
+            Mesh=Mover->GetPrimaryVisualComponent<USkeletalMeshComponent>();
+    if (!IsValid(Mesh) || Mesh->GetOwner()!=Pawn || !Mesh->IsRegistered() || !Mesh->DoesSocketExist(TEXT("pelvis")))
+    { Reason=TEXT("the actual Pawn has no registered pelvis mesh"); return false; }
+
+    if (!PriorFormalMeshTick.IsSet())
+    {
+        // The Day insert paused pose evaluation. The root can arrive before Mover's visual
+        // component and the post-physics skeleton finish the move.
+        ReleaseParticipantPose();
+        for (auto* Part : TInlineComponentArray<USkeletalMeshComponent*>(Pawn.Get()))
+        {
+            Part->ResetAnimInstanceDynamics(ETeleportType::TeleportPhysics);
+            Part->ForceClothNextUpdateTeleportAndReset();
+        }
+        FormalPoseMesh=Mesh;
+        auto* Source=Cast<USkeletalMeshComponent>(Mesh->LeaderPoseComponent.Get());
+        if (!Source) Source=Mesh;
+        FormalBoneSource=Source;
+        PriorFormalMeshTick=Source->VisibilityBasedAnimTickOption;
+        bFormalMeshWasPaused=Source->bPauseAnims;
+        Source->bPauseAnims=false;
+        Source->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+        FormalArrivalBoneRevision=Mesh->GetBoneTransformRevisionNumber();
+        AddTickPrerequisiteComponent(Mesh);
+        if (Source!=Mesh) AddTickPrerequisiteComponent(Source);
+    }
+    if (FormalPoseMesh.Get()!=Mesh || Mesh->GetBoneTransformRevisionNumber()==FormalArrivalBoneRevision)
+    { Reason=TEXT("waiting for an updated Night skeletal pose"); return false; }
+
+    const auto* Capsule=Cast<UCapsuleComponent>(Pawn->GetRootComponent());
+    const FVector Root=Pawn->GetActorLocation();
+    const FVector Pelvis=Mesh->GetSocketLocation(TEXT("pelvis"));
+    const FTransform SocketPose=Mount->GetSocketTransform(Socket);
+    auto* Body=FindVisibleBody();
+    FormalVisibleMesh=Body;
+    const auto InTorso=[Capsule,Root](const FVector& Point)
+    {
+        return Capsule && !Point.ContainsNaN() &&
+            FMath::Abs(Point.Z-Root.Z)<Capsule->GetScaledCapsuleHalfHeight()*.72 &&
+            FVector::DistSquared2D(Point,Root)<FMath::Square(Capsule->GetScaledCapsuleRadius()+12.);
+    };
+    if (!Body || SocketPose.ContainsNaN() || !InTorso(Pelvis) || !InTorso(SocketPose.GetLocation()) ||
+        !InTorso(Body->GetSocketLocation(TEXT("pelvis"))) ||
+        FVector::Dist(Body->GetSocketLocation(TEXT("pelvis")),Pelvis)>Capsule->GetScaledCapsuleRadius())
+    {
+        StableWaistPose.Reset();
+        Reason=TEXT("visible torso and waist socket are not inside the arrived Pawn capsule");
+        return false;
+    }
+    // A newly evaluated bone revision can still be in the middle of a ragdoll/Mover correction.
+    const double Now=GetWorld()->GetTimeSeconds();
+    if (!StableWaistPose || !SocketPose.GetLocation().Equals(StableWaistPose->GetLocation(),2.) ||
+        SocketPose.GetRotation().AngularDistance(StableWaistPose->GetRotation())>FMath::DegreesToRadians(5.))
+    {
+        StableWaistPose=SocketPose;
+        StableWaistSince=Now;
+    }
+    if (Now-StableWaistSince<.12)
+    { Reason=TEXT("waiting for the actual waist socket to settle"); return false; }
+    return true;
+}
+
+void AYIXIV3Cinematic::RestoreFormalNightPose()
+{
+    if (!PriorFormalMeshTick.IsSet()) return;
+    if (auto* Source=FormalBoneSource.Get())
+    {
+        Source->VisibilityBasedAnimTickOption=*PriorFormalMeshTick;
+        Source->bPauseAnims=bFormalMeshWasPaused;
+        if (Source!=FormalPoseMesh.Get()) RemoveTickPrerequisiteComponent(Source);
+    }
+    if (auto* Mesh=FormalPoseMesh.Get()) RemoveTickPrerequisiteComponent(Mesh);
+    PriorFormalMeshTick.Reset();
+}
+
+bool AYIXIV3Cinematic::BuildFormalNightView(FMinimalViewInfo& View, FString& Reason) const
+{
     const auto* Mesh=Toy->FindComponentByClass<UStaticMeshComponent>();
-    if (!Mesh || !Mesh->GetStaticMesh() || !Carry->GetWaistPreviewTransform(WaistPose)) return false;
-    const FVector Center=WaistPose.TransformPosition(Mesh->GetStaticMesh()->GetBounds().Origin);
+    const auto* Root=Toy->GetRootComponent();
+    const auto* Parent=Root ? Root->GetAttachParent() : nullptr;
+    if (!Parent || Parent->GetOwner()!=Pawn || !Mesh || !Mesh->GetStaticMesh() || !Mesh->ShouldRender() || Toy->IsHidden())
+    { Reason=TEXT("the real toy is not visibly attached to the Night Pawn"); return false; }
+
+    const FTransform& ToyFrame=Mesh->GetComponentTransform();
+    const FBox WorldBox=Mesh->GetStaticMesh()->GetBoundingBox().TransformBy(ToyFrame);
+    const FVector Center=ToyFrame.TransformPosition(Mesh->GetStaticMesh()->GetBounds().Origin);
+    const FRotator Yaw(0,Pawn->GetActorRotation().Yaw,0);
     FVector Rear=NightCloseupDirection;
     Rear.X=FMath::Min(-.25,Rear.X);
-    const float Yaw=Pawn->GetActorRotation().Yaw;
-    const FVector Eye=Center+FRotator(0,Yaw,0).RotateVector(Rear.GetSafeNormal())*CloseupDistance;
+    const FVector Eye=Center+Yaw.RotateVector(Rear.GetSafeNormal())*CloseupDistance;
+    const auto* Capsule=Cast<UCapsuleComponent>(Pawn->GetRootComponent());
+    const auto* PawnMesh=FormalPoseMesh.Get();
+    const FVector Pelvis=PawnMesh ? PawnMesh->GetSocketLocation(TEXT("pelvis")) : Pawn->GetActorLocation();
+    const FVector PawnCenter=Pawn->GetActorLocation();
+    if (!Capsule || Center.ContainsNaN() || Eye.ContainsNaN() || !WorldBox.IsValid ||
+        FMath::Abs(Center.Z-PawnCenter.Z)>Capsule->GetScaledCapsuleHalfHeight() ||
+        Eye.Z<=PawnCenter.Z-Capsule->GetScaledCapsuleHalfHeight()+12. ||
+        FVector::DistSquared2D(Eye,PawnCenter)<FMath::Square(Capsule->GetScaledCapsuleRadius()+12.) ||
+        FVector::DistSquared(Center,Pelvis)>FMath::Square(120.) ||
+        FVector::DistSquared(Eye,Pawn->GetActorLocation())>FMath::Square(600.) ||
+        FVector::DotProduct(Eye-Pawn->GetActorLocation(),Yaw.Vector())>=-15. ||
+        WorldBox.ComputeSquaredDistanceToPoint(Eye)<FMath::Square(12.))
+    { Reason=TEXT("the attached toy or close-up camera is outside its local framing or near-clip safety range"); return false; }
+
     FCollisionQueryParams Query(SCENE_QUERY_STAT(YIXIFormalWaistSight),false,this);
     Query.AddIgnoredActor(Pawn);
     Query.AddIgnoredActor(Toy);
     FHitResult Hit;
-    // The waist insert must have both camera clearance and a sightline before the toy is committed.
-    return ClearCameraPath(Center,Eye) &&
-        !GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query);
+    if (!ClearCameraPath(Center,Eye) || GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query))
+    { Reason=TEXT("the Night waist camera has an obstructed sightline"); return false; }
+    // The world sweep ignores the participant. Test the visible costume separately,
+    // stopping at the near surface of the toy rather than hitting the body behind it.
+    const FVector ToToy=(Center-Eye).GetSafeNormal();
+    const FVector ToyFront=Eye+ToToy*FMath::Max(0.,FMath::Sqrt(WorldBox.ComputeSquaredDistanceToPoint(Eye))-1.);
+    FCollisionQueryParams BodySight(SCENE_QUERY_STAT(YIXIFormalCostumeSight),false);
+    for (auto* Part : TInlineComponentArray<USkeletalMeshComponent*>(Pawn.Get()))
+    {
+        if (Part->IsRegistered() && Part->ShouldRender() && Part->GetPhysicsAsset() &&
+            Part->LineTraceComponent(Hit,Eye,ToyFront,BodySight))
+        { Reason=FString::Printf(TEXT("costume %s obscures the waist toy"),*Part->GetName()); return false; }
+    }
+    View=LookAt(Eye,Center,LockedToyFOV);
+    View.Rotation.Roll=0.f;
+    return true;
+}
+
+void AYIXIV3Cinematic::LogFormalNightCamera(const TCHAR* Phase, const FMinimalViewInfo* Intended) const
+{
+    const auto* Transition=FormalTransition.Get();
+    if (!Transition || !IsValid(Pawn) || !IsValid(Toy) || !IsValid(PC) || !PC->PlayerCameraManager) return;
+    const auto* Stream=UGameplayStatics::GetStreamingLevel(this,Transition->NightStreamingLevel);
+    const auto* Mesh=FindVisibleBody();
+    USceneComponent* Mount=nullptr; FName Socket;
+    if (IsValid(Carry)) Carry->GetWaistMount(Mount,Socket);
+    const auto* MountMesh=Cast<USkeletalMeshComponent>(Mount);
+    const auto* Root=Toy->GetRootComponent();
+    const auto* Parent=Root ? Root->GetAttachParent() : nullptr;
+    const FMinimalViewInfo& Live=PC->PlayerCameraManager->GetCameraCacheView();
+    const FMinimalViewInfo& View=Intended ? *Intended : Live;
+    const auto* Day=UGameplayStatics::GetStreamingLevel(this,Transition->DayStreamingLevel);
+    auto* Lights=Transition->LightStateSequence.Get();
+    auto* LightPlayer=Lights ? Lights->GetSequencePlayer() : nullptr;
+    UE_LOG(LogYIXIV3,Display,TEXT("YIXI_P04_REGRESSION %s frame=%llu mode=%s viewTarget=%s cine=%s pos=%s rot=%s fov=%.2f distancePawn=%.1f distanceToy=%.1f pawn=%s pawnRot=%s pawnVisible=%d mesh=%s meshPos=%s meshVisible=%d pelvis=%s toy=%s mount=%s socket=%s level=%s destWorld=%s world=%s dayLoadedVisible=%d/%d nightLoadedVisible=%d/%d shot=%s inputHeld=%d ignoredMoveLook=%d/%d dayFrameHeld=%d lights=%s checkedFrame=%d liveFrame=%d meshTransform=%s meshHiddenInGame=%d ownerNoSee=%d onlyOwnerSee=%d bodyPelvis=%s"),
+        Phase,GFrameCounter,Intended ? TEXT("proposed") : TEXT("camera-cache"),*GetNameSafe(PC->GetViewTarget()),
+        *GetNameSafe(CameraActor),*View.Location.ToCompactString(),*View.Rotation.ToCompactString(),View.FOV,
+        FVector::Dist(View.Location,Pawn->GetActorLocation()),FVector::Dist(View.Location,Toy->GetActorLocation()),
+        *Pawn->GetActorLocation().ToCompactString(),*Pawn->GetActorRotation().ToCompactString(),!Pawn->IsHidden(),
+        *GetNameSafe(Mesh),Mesh ? *Mesh->GetComponentLocation().ToCompactString() : TEXT("missing"),Mesh && Mesh->ShouldRender(),
+        MountMesh ? *MountMesh->GetSocketLocation(TEXT("pelvis")).ToCompactString() : TEXT("missing"),
+        *Toy->GetActorLocation().ToCompactString(),*GetNameSafe(Parent),Root ? *Root->GetAttachSocketName().ToString() : TEXT("None"),
+        Stream ? *Stream->LevelTransform.ToString() : TEXT("missing"),*FormalNightPose.GetLocation().ToCompactString(),
+        *GetWorld()->GetName(),Day && Day->IsLevelLoaded(),Day && Day->IsLevelVisible(),
+        Stream && Stream->IsLevelLoaded(),Stream && Stream->IsLevelVisible(),*UEnum::GetValueAsString(Shot),bInputHeld,
+        PC->IsMoveInputIgnored(),PC->IsLookInputIgnored(),FormalDayFrame && FormalDayFrame->IsCaptured(),
+        *GetPathNameSafe(Lights ? Lights->GetSequence() : nullptr),Transition->LightingSequenceFrame,
+        LightPlayer ? LightPlayer->GetCurrentTime().Time.FrameNumber.Value : -1, Mesh ? *Mesh->GetComponentTransform().ToString() : TEXT("missing"),
+        Mesh && Mesh->bHiddenInGame,Mesh && Mesh->bOwnerNoSee,Mesh && Mesh->bOnlyOwnerSee,
+        Mesh ? *Mesh->GetSocketLocation(TEXT("pelvis")).ToCompactString() : TEXT("missing"));
 }
 
 void AYIXIV3Cinematic::Tick(float Delta)
@@ -1009,6 +1183,11 @@ void AYIXIV3Cinematic::Tick(float Delta)
         {
             HoldGameStart=GetWorld()->GetTimeSeconds();
             SetShot(EYIXIV3Shot::Hold);
+            if (FormalStory)
+            {
+                DayPawnPose=Pawn->GetActorTransform();
+                LogFormalNightCamera(TEXT("day-hold-start"));
+            }
         }
         break;
     }
@@ -1020,6 +1199,21 @@ void AYIXIV3Cinematic::Tick(float Delta)
         const float HoldDuration=CutAt-StableAt;
         const float HoldTime=GetWorld()->GetTimeSeconds()-HoldGameStart;
         const bool CutNow=HoldTime>=HoldDuration || (bSkip && HoldTime>=.15f);
+        if (FormalStory && !bMoved)
+        {
+            if (!FindVisibleBody() || !Pawn->GetActorLocation().Equals(DayPawnPose.GetLocation(),10.f) ||
+                PC->GetViewTarget()!=CameraActor)
+            {
+                LogFormalNightCamera(TEXT("day-presentation-invalid"));
+                Close(false,TEXT("Day body or movie camera lost before cut"));
+                return;
+            }
+            if (!bLoggedDayRemaining && HoldTime>=HoldDuration-2.f)
+            {
+                bLoggedDayRemaining=true;
+                LogFormalNightCamera(TEXT("day-two-seconds-left"));
+            }
+        }
         Sample(CutNow ? CutAt : StableAt+HoldTime);
         Camera(FloorView);
         const float Lead=FMath::Min(FMath::Max(EchoLeadSeconds,.05f),HoldDuration);
@@ -1048,6 +1242,19 @@ void AYIXIV3Cinematic::Tick(float Delta)
                     return;
                 }
                 GoalLocation=FormalNightPose.GetLocation();
+                if (!FormalDayFrame)
+                {
+                    FormalDayFrame=FYIXIFormalCutFrameHold::Begin(PC);
+                    if (!FormalDayFrame) { Close(false,TEXT("formal Day viewport unavailable")); return; }
+                    FormalPoseDeadline=GetWorld()->GetTimeSeconds()+2.;
+                }
+                if (!FormalDayFrame->IsCaptured())
+                {
+                    if (GetWorld()->GetTimeSeconds()>=FormalPoseDeadline)
+                        Close(false,TEXT("no rendered Day frame acknowledged; Pawn retained in Day"));
+                    return;
+                }
+                FormalPoseDeadline=0;
             }
             else if (!NightDestination(GoalLocation))
             { Close(false,TEXT("night destination unavailable")); return; }
@@ -1068,8 +1275,33 @@ void AYIXIV3Cinematic::Tick(float Delta)
             if ((Waiting+=Delta)>1.f) Close(false,TEXT("night relocation failed"));
             return;
         }
-        if (Transition && (!ValidateFormalNightCamera() || !Transition->ApplyFormalCutLighting(Pawn)))
-        { Close(false,TEXT("formal Night waist camera or lighting is unsafe")); return; }
+        if (Transition)
+        {
+            const double Now=GetWorld()->GetTimeSeconds();
+            if (FormalPoseDeadline==0) FormalPoseDeadline=Now+3.;
+            FString Reason;
+            if (!UpdateFormalNightPose(Reason))
+            {
+                if (Now>=FormalPoseDeadline)
+                {
+                    UE_LOG(LogYIXIV3,Warning,TEXT("YIXI_P04_REGRESSION refused: %s"),*Reason);
+                    LogFormalNightCamera(TEXT("night-pose-timeout"));
+                    Close(false,TEXT("Night pose synchronization failed"));
+                }
+                return;
+            }
+            if (!Carry->PrepareWaistAttachment())
+            { Close(false,TEXT("Night waist preparation failed")); return; }
+            if (!BuildFormalNightView(NightView,Reason))
+            {
+                UE_LOG(LogYIXIV3,Warning,TEXT("YIXI_P04_REGRESSION refused: %s"),*Reason);
+                Close(false,TEXT("Night close-up is unsafe"));
+                return;
+            }
+            LogFormalNightCamera(TEXT("pre-cut"),&NightView);
+            if (!Transition->ApplyFormalCutLighting(Pawn))
+            { Close(false,TEXT("formal Night lighting is unsafe")); return; }
+        }
         const int32 Id=Story->RequestV3Cut(Pawn,Toy);
         if (Id<=0 || (Story->Stage!=EYIXIInteractionStoryStage::V3NightPresentation && !Story->CompleteMatchCut(Id,true))
             || Carry->GetToyActor()!=Toy || Carry->GetCarryState()!=EYIXIToyCarryState::AttachedAtWaist)
@@ -1077,10 +1309,17 @@ void AYIXIV3Cinematic::Tick(float Delta)
         bCut=true;
         if (Transition) Transition->CommitFormalCut(Pawn);
         else ShowNight(true);
-        CaptureWaistInsert();
-        NightView=ToyView(true);
+        if (!Transition)
+        {
+            CaptureWaistInsert();
+            NightView=ToyView(true);
+        }
         Camera(NightView);
+        if (Transition && PC->GetViewTarget()!=CameraActor) PC->SetViewTarget(CameraActor);
         PC->PlayerCameraManager->SetGameCameraCutThisFrame();
+        // V3 ticks in PostPhysics, before this world's camera-manager update and viewport draw.
+        // Previously submitted Day families keep the captured image until their render completes.
+        FormalDayFrame.Reset();
         Mix->CommitNightMix();
         SetShot(EYIXIV3Shot::Night);
         UE_LOG(LogYIXIV3,Display,TEXT("MATCH id=%d sameToy=%s waist=true holdGame=%.5f skip=%d"),Id,*Toy->GetPathName(),HoldTime,bSkip);
@@ -1088,6 +1327,47 @@ void AYIXIV3Cinematic::Tick(float Delta)
     }
     case EYIXIV3Shot::Night:
     {
+        if (FormalStory)
+        {
+            const FMinimalViewInfo& Live=PC->PlayerCameraManager->GetCameraCacheView();
+            const FVector LiveEye=Live.Location;
+            const FVector PawnPosition=Pawn->GetActorLocation();
+            if (!bLoggedFormalFirstFrame)
+            {
+                LogFormalNightCamera(TEXT("cut-first-frame"));
+                bLoggedFormalFirstFrame=true;
+            }
+            const auto* ToyMesh=Toy->FindComponentByClass<UStaticMeshComponent>();
+            const auto* Capsule=Cast<UCapsuleComponent>(Pawn->GetRootComponent());
+            const FVector Center=ToyMesh ? ToyMesh->Bounds.Origin : Toy->GetActorLocation();
+            const FVector ToToy=Center-LiveEye;
+            const auto* Root=Toy->GetRootComponent();
+            if (PC->GetViewTarget()!=CameraActor || !LiveEye.Equals(NightView.Location,2.) ||
+                !Live.Rotation.Equals(NightView.Rotation,1.f) || !Capsule || Center.ContainsNaN() ||
+                !Root || Root->GetAttachParent()!=FormalPoseMesh.Get() || !ToyMesh || !ToyMesh->ShouldRender() ||
+                FMath::Abs(Center.Z-PawnPosition.Z)>Capsule->GetScaledCapsuleHalfHeight() ||
+                FVector::DotProduct(ToToy.GetSafeNormal(),Live.Rotation.Vector())<FMath::Cos(FMath::DegreesToRadians(Live.FOV*.28f)) ||
+                !FindVisibleBody())
+            {
+                UE_LOG(LogYIXIV3,Warning,TEXT("YIXI_P04_REGRESSION invalid Night framing or attachment; ending insert with gameplay recovery"));
+                LogFormalNightCamera(TEXT("invalid-insert"));
+                Close(true,TEXT("unsafe Night close-up"));
+                return;
+            }
+            Sample(FMath::Min(Next,PullAt));
+            if (!bLoggedFormalMidpoint && SequenceSeconds>=.5f*(CutAt+PullAt))
+            {
+                LogFormalNightCamera(TEXT("insert-midpoint"));
+                bLoggedFormalMidpoint=true;
+            }
+            if (SequenceSeconds>=PullAt)
+            {
+                BeginFormalNightPullback();
+                break;
+            }
+            Camera(NightView);
+            break;
+        }
         Sample(FMath::Min(Next,ReturnAt));
         if (SequenceSeconds<PullAt)
         {
@@ -1103,7 +1383,7 @@ void AYIXIV3Cinematic::Tick(float Delta)
             if (Progress>=BlendSeconds) RestoreWaistAttachment();
             else UpdateWaistInsert(FMath::SmoothStep(0.f,BlendSeconds,Progress));
         }
-        const FRotator Yaw(0,FormalStory ? FormalNightPose.Rotator().Yaw : NightLanding->GetComponentRotation().Yaw,0);
+        const FRotator Yaw(0,NightLanding->GetComponentRotation().Yaw,0);
         const FVector Position=Pawn->GetActorLocation();
         const FMinimalViewInfo Back=LookAt(Position+Yaw.RotateVector(PullbackOffset),Position+FVector(0,0,45),EntryView.FOV);
         FMinimalViewInfo V=Between(NightView,Back,FMath::Clamp(CameraTravel,0.f,1.f));
@@ -1138,9 +1418,27 @@ void AYIXIV3Cinematic::BeginHandoff()
     Waiting=0; Sample(ReturnAt); SetShot(EYIXIV3Shot::Handoff);
 }
 
+void AYIXIV3Cinematic::BeginFormalNightPullback()
+{
+    LogFormalNightCamera(TEXT("pullback-start"));
+    RestoreWaistAttachment();
+    ReleaseParticipantPose();
+    RestoreFormalNightPose();
+    if (auto* Gameplay=Pawn->FindComponentByClass<UGameplayCameraComponent>())
+        Gameplay->ActivateCameraForPlayerController(PC,false);
+    // The frozen Cine view is the outgoing target. The camera manager evaluates the
+    // actual third-person Pawn camera as the destination of the 3.5-second blend.
+    const float BlendSeconds=bSkip ? EndAt-ReturnAt : ReturnAt-PullAt;
+    PC->SetViewTargetWithBlend(Pawn,BlendSeconds,VTBlend_Cubic,0,true);
+    Waiting=0;
+    if (bSkip) Sample(ReturnAt);
+    SetShot(EYIXIV3Shot::Handoff);
+}
+
 void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
 {
     if (bClosing) return;
+    if (!bCompleted && FormalStory && IsValid(Carry)) Carry->CancelPreparedWaistAttachment();
     const bool bSamePawn=IsValid(Pawn) && IsValid(PC) && PC->GetPawn()==Pawn;
     if (!bCompleted && FormalStory && bMoved && bSamePawn && !bEndingPresentationPlay && Shot!=EYIXIV3Shot::ReturningToDay)
     {
@@ -1160,6 +1458,7 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
     SetActorTickEnabled(false);
     RestoreWaistAttachment();
     ReleaseParticipantPose();
+    RestoreFormalNightPose();
     if (!bCompleted)
     {
         if (IsValid(Story) && IsValid(Story->GirlAftermath)) Story->GirlAftermath->SetActorHiddenInGame(true);
@@ -1179,8 +1478,10 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
         if (!bCompleted) PC->SetControlRotation(DayControlRotation);
         if (auto* Gameplay=Pawn->FindComponentByClass<UGameplayCameraComponent>())
             Gameplay->ActivateCameraForPlayerController(PC,false);
-        PC->SetViewTarget(bCompleted || !PreviousView.IsValid() ? Pawn.Get() : PreviousView.Get());
+        AActor* Target=bCompleted || !PreviousView.IsValid() ? Pawn.Get() : PreviousView.Get();
+        if (!FormalStory || PC->GetViewTarget()!=Target) PC->SetViewTarget(Target);
     }
+    FormalDayFrame.Reset();
     if (IsValid(PC) && bInputHeld)
     {
         PC->SetIgnoreMoveInput(false); PC->SetIgnoreLookInput(false);
@@ -1198,6 +1499,7 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
     CinematicInput=nullptr;
     bInputHeld=false;
     if (IsValid(Interactor)) Interactor->SetCinematicSuppressed(bWasSuppressed);
+    if (FormalStory && bCompleted) LogFormalNightCamera(TEXT("gameplay-restored"));
     if (IsValid(CameraActor)) CameraActor->Destroy();
     CameraActor=nullptr;
     if (IsValid(Player)) Player->Stop();
@@ -1231,6 +1533,9 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
         }
     }
     PreviousView.Reset();
+    FormalPoseMesh.Reset();
+    FormalBoneSource.Reset();
+    FormalVisibleMesh.Reset();
     Story=nullptr; PC=nullptr; Pawn=nullptr; Toy=nullptr; Interactor=nullptr; Carry=nullptr;
 }
 

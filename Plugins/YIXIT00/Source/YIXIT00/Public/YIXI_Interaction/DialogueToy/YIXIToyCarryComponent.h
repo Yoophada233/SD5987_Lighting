@@ -116,7 +116,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Toy")
 	bool CanAttachToWaist() const;
-	bool GetWaistPreviewTransform(FTransform& OutPose) const;
+	bool GetWaistMount(USceneComponent*& OutParent, FName& OutSocket) const;
+	// Stage the real attachment without committing the story state or losing the hand recovery.
+	bool PrepareWaistAttachment();
+	void CancelPreparedWaistAttachment();
 
 	UFUNCTION(BlueprintCallable, Category = "Toy")
 	bool TryAttachToWaist();
@@ -162,6 +165,7 @@ private:
 	TObjectPtr<AStaticMeshActor> ToyActor;
 
 	TWeakObjectPtr<APawn> CarrierPawn;
+	TOptional<FTransform> BeforePreparedWaist;
 	TWeakObjectPtr<APawn> CinematicDropPawn;
 	TWeakObjectPtr<AActor> CinematicDropFloor;
 	TWeakObjectPtr<USceneComponent> ReleaseParent;

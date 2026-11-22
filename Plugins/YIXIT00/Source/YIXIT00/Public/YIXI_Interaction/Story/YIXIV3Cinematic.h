@@ -18,6 +18,7 @@ class ULevelSequencePlayer;
 class UNiagaraSystem;
 class AYIXIInteractionStoryCoordinator;
 class AYIXIT00TransitionController;
+class FYIXIFormalCutFrameHold;
 class AYIXIScriptedRock;
 class AYIXIStoryGirl;
 class AYIXIStoryToyPickup;
@@ -25,6 +26,7 @@ class UYIXIToyCarryComponent;
 class UYIXIV3AudioComponent;
 class UYIXIInteractorComponent;
 class UYIXIV3NeutralInput;
+enum class EVisibilityBasedAnimTickOption : uint8;
 
 UENUM(BlueprintType)
 enum class EYIXIV3Shot : uint8 { Idle, Shoulder, Hand, Fall, Hold, Night, Handoff, HandBlend, FloorReframe, StageAlign, ReturningToDay };
@@ -121,7 +123,11 @@ private:
     bool UsesDayBindings() const { return bDayOnlyPreview || FormalStory!=nullptr; }
     AYIXIT00TransitionController* FindFormalTransition() const;
     UYIXIV3AudioComponent* PresentationAudio() const;
-    bool ValidateFormalNightCamera() const;
+    bool UpdateFormalNightPose(FString& Reason);
+    USkeletalMeshComponent* FindVisibleBody() const;
+    void RestoreFormalNightPose();
+    bool BuildFormalNightView(FMinimalViewInfo& View, FString& Reason) const;
+    void LogFormalNightCamera(const TCHAR* Phase, const FMinimalViewInfo* Intended = nullptr) const;
     void PrepareSequence();
     bool BeginPresentation(AYIXIInteractionStoryCoordinator* Sender, APawn* Participant);
     bool ReadTimeline();
@@ -150,6 +156,7 @@ private:
     FMinimalViewInfo DayToyView(FVector Eye, FVector Center) const;
     float DayToyFOV(double Distance) const;
     void BeginHandoff();
+    void BeginFormalNightPullback();
     void Close(bool bCompleted, const TCHAR* Reason);
     UPROPERTY(Transient) TObjectPtr<ULevelSequencePlayer> Player;
     UPROPERTY(Transient) TObjectPtr<ALevelSequenceActor> PlayerActor;
@@ -176,6 +183,19 @@ private:
     FMinimalViewInfo EntryView, ShoulderView, DropStartView, FloorView, NightView;
     TOptional<FVector> StageCameraBend;
     TArray<TWeakObjectPtr<USkeletalMeshComponent>> FrozenMeshes;
+    TWeakObjectPtr<USkeletalMeshComponent> FormalPoseMesh;
+    TWeakObjectPtr<USkeletalMeshComponent> FormalBoneSource;
+    TWeakObjectPtr<USkeletalMeshComponent> FormalVisibleMesh;
+    TOptional<EVisibilityBasedAnimTickOption> PriorFormalMeshTick;
+    uint32 FormalArrivalBoneRevision=0;
+    double FormalPoseDeadline=0;
+    TSharedPtr<FYIXIFormalCutFrameHold> FormalDayFrame;
+    TOptional<FTransform> StableWaistPose;
+    double StableWaistSince=0;
+    bool bLoggedDayRemaining=false;
+    bool bFormalMeshWasPaused=false;
+    bool bLoggedFormalFirstFrame=false;
+    bool bLoggedFormalMidpoint=false;
     TWeakObjectPtr<USceneComponent> WaistParent;
     FName WaistSocket=NAME_None;
     FTransform AuthoredWaistRelative, InsertInPawn;

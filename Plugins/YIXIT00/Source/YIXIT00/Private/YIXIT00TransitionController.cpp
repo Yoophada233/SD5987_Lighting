@@ -242,12 +242,10 @@ bool AYIXIT00TransitionController::ApplySequenceLightingFrame(int32 Frame,FStrin
         const auto Objects=Player->GetBoundObjects(ID);
         if (Objects.Num()!=1 || !Objects[0] || Objects[0]->GetWorld()!=GetWorld())
         {
-            // The formal sequence retains a retired diagnostic sun and its two component tracks.
-            const FMovieScenePossessable* Parent=Scene->FindPossessable(P.GetParent());
-            if (bUseFormalStoryTransition && Objects.IsEmpty() &&
-                (P.GetName()==TEXT("P02_DirectionalLight") || (Parent && Parent->GetName()==TEXT("P02_DirectionalLight"))))
-                continue;
             Reason=TEXT("T01 lighting binding is not unique and World-local: ")+P.GetName();
+            if (bUseFormalStoryTransition)
+                UE_LOG(LogYIXIT00,Error,TEXT("YIXI_P04_REGRESSION light-binding-error frame=%d binding=%s guid=%s count=%d"),
+                    Frame,*P.GetName(),*P.GetGuid().ToString(),Objects.Num());
             return false;
         }
         if (Objects[0]->IsA<AYIXIT01L01LightingRig>() || Objects[0]->GetTypedOuter<AYIXIT01L01LightingRig>())
@@ -273,6 +271,9 @@ bool AYIXIT00TransitionController::ApplySequenceLightingFrame(int32 Frame,FStrin
     if (Player->IsPlaying() || Player->GetCurrentTime().Time.FrameNumber.Value!=Frame)
     { Reason=TEXT("T01 lighting player failed to hold the requested frame"); return false; }
     LightingSequenceFrame=Frame;
+    if (bUseFormalStoryTransition)
+        UE_LOG(LogYIXIT00,Display,TEXT("YIXI_P04_REGRESSION lighting frame=%d player=%s paused=%d bindings=%s"),
+            Frame,*Player->GetPathName(),!Player->IsPlaying(),*LightingBindingReport);
     UE_LOG(LogYIXIT00,Display,TEXT("[YIXI_T01] NATIVE_SEQUENCE_JUMP frame=%d engine_frame=%llu player=%s L01=UNUSED"),
         Frame,GFrameCounter,*Player->GetPathName());
     return true;

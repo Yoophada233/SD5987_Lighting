@@ -13,6 +13,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "Components/CapsuleComponent.h"
 #include "MoverComponent.h"
+#include "DefaultMovementSet/Settings/CommonLegacyMovementSettings.h"
+#include "MoveLibrary/FloorQueryUtils.h"
 #include "YIXI_Interaction/DialogueToy/YIXIToyCarryComponent.h"
 #include "YIXI_Interaction/Story/YIXIV3AudioComponent.h"
 #include "YIXI_Interaction/YIXIInteractorComponent.h"
@@ -70,14 +72,43 @@ bool AYIXIT00TransitionController::ProbeFormalLanding(const APawn* Participant, 
     const FVector Marker=FormalDestination->GetActorLocation();
     const FVector Up=FVector::UpVector;
     const double HalfHeight=Capsule->GetScaledCapsuleHalfHeight();
+    const double Radius=Capsule->GetScaledCapsuleRadius();
+    constexpr double MarkerTolerance=25.; // Mark the floor, not the capsule center.
     FCollisionQueryParams Query(SCENE_QUERY_STAT(YIXIFormalNightLanding),false,Participant);
-    const FCollisionShape Shape=FCollisionShape::MakeCapsule(Capsule->GetScaledCapsuleRadius(),HalfHeight);
+    const FCollisionShape Shape=FCollisionShape::MakeCapsule(Radius,HalfHeight);
     const FCollisionResponseParams Responses(Capsule->GetCollisionResponseToChannels());
+    const ECollisionChannel Channel=Capsule->GetCollisionObjectType();
+    const auto* ParticipantMover=Participant->FindComponentByClass<UMoverComponent>();
+    const auto* Ground=ParticipantMover ? ParticipantMover->FindSharedSettings<UCommonLegacyMovementSettings>() : nullptr;
+    const auto IsNightSupport=[&](const FHitResult& Hit)
+    {
+        return Hit.GetActor() && Hit.GetActor()->GetLevel()==Night->GetLoadedLevel() &&
+            UFloorQueryUtils::IsHitSurfaceWalkable(Hit,Up,Ground ? Ground->MaxWalkSlopeCosine : .65f);
+    };
+    FHitResult Support;
+    const FVector Bottom=Marker-Up*MarkerTolerance;
+    if (!GetWorld()->LineTraceSingleByChannel(Support,Marker+Up*MarkerTolerance,Bottom,Channel,Query,Responses) ||
+        !IsNightSupport(Support))
+        return false;
+
+    // A marker tucked between two close surfaces cannot reliably identify the intended floor.
+    if (Support.ImpactPoint.Z>Marker.Z+1.)
+    {
+        FHitResult Lower;
+        if (GetWorld()->LineTraceSingleByChannel(Lower,Marker,Bottom,Channel,Query,Responses) &&
+            Lower.IsValidBlockingHit() && Lower.ImpactPoint.Z<Support.ImpactPoint.Z-2.)
+            return false;
+    }
+
+    // A rounded capsule touches uphill of its center. Compare the contact to the
+    // reference plane rather than comparing two different points' world Z values.
+    const FVector AtFloor=Support.ImpactPoint+Up*HalfHeight;
     FHitResult Floor;
-    if (!GetWorld()->SweepSingleByChannel(Floor,Marker+Up*(HalfHeight+150.),Marker+Up*(HalfHeight-120.),
-        FQuat::Identity, Capsule->GetCollisionObjectType(), Shape, Query, Responses) ||
-        Floor.bStartPenetrating || Floor.ImpactNormal.Z<.65 || !Floor.GetActor() ||
-        Floor.GetActor()->GetLevel()!=Night->GetLoadedLevel())
+    if (!GetWorld()->SweepSingleByChannel(Floor,AtFloor+Up*(Radius+3.),AtFloor-Up*3.,
+        FQuat::Identity,Channel,Shape,Query,Responses) || !IsNightSupport(Floor) ||
+        FMath::Abs(FVector::DotProduct(Floor.ImpactPoint-Support.ImpactPoint,Support.ImpactNormal))>3. ||
+        (Floor.GetComponent()!=Support.GetComponent() &&
+         FVector::DotProduct(Floor.ImpactNormal,Support.ImpactNormal)<.98))
         return false;
     const FVector Center=Floor.Location+Up*3.;
     if (GetWorld()->OverlapBlockingTestByChannel(Center,FQuat::Identity,
@@ -97,7 +128,8 @@ bool AYIXIT00TransitionController::ApplyFormalCutLighting(APawn* Participant)
 {
     FTransform Landing;
     if (!ValidateFormalParticipant(Participant) || !GetFormalLanding(Participant,Landing) ||
-        !Participant->GetActorLocation().Equals(Landing.GetLocation(),10.))
+        !Participant->GetActorLocation().Equals(Landing.GetLocation(),10.) ||
+        FMath::Abs(FMath::FindDeltaAngleDegrees(Participant->GetActorRotation().Yaw,Landing.Rotator().Yaw))>3.)
         return false;
     FString Reason;
     bFormalNightLighting=true; // A partial Sequencer evaluation must also roll back.
@@ -185,6 +217,10 @@ void AYIXIT00TransitionController::TickFormalTransition(double Now)
         }
         if (bP04Preloading && Now-P04LoadAt>StreamingTimeoutSeconds)
         {
+            if (ValidateFormalParticipant(Participant) && Night && Night->IsLevelVisible() &&
+                !ProbeFormalLanding(Participant,Landing))
+                UE_LOG(LogTemp,Warning,TEXT("YIXI_P04_REGRESSION landing refused at %s (%s): place the marker within 25 cm of a single walkable Night floor with capsule clearance."),
+                    *GetNameSafe(FormalDestination),FormalDestination ? *FormalDestination->GetActorLocation().ToCompactString() : TEXT("unbound"));
             bP04Preloading=false;
             bP04NightFailed=true;
             if (Night)
