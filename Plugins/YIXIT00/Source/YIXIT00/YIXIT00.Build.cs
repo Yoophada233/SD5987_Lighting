@@ -5,7 +5,7 @@ public class YIXIT00 : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "RenderCore", "InputCore", "UMG" });
-        PrivateDependencyModuleNames.AddRange(new[] { "EnhancedInput", "Mover", "GameplayCameras", "CinematicCamera", "RHI", "Json", "Slate", "SlateCore", "LevelSequence", "MovieScene", "Niagara" });
+        PrivateDependencyModuleNames.AddRange(new[] { "EnhancedInput", "Mover", "GameplayCameras", "CinematicCamera", "RHI", "Renderer", "Json", "Slate", "SlateCore", "LevelSequence", "MovieScene", "Niagara" });
         if (Target.bBuildEditor) PrivateDependencyModuleNames.Add("Landscape");
     }
 }
