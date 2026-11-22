@@ -6,8 +6,8 @@
 
 1. 从内容浏览器拖入 **`/Game/YIXI_GrassSystem/BP_YIXI_GrassArea`**，放到需要覆盖区域的中心。区域保持轴对齐，Actor Scale保持1；覆盖范围用下表参数设置，不缩放Actor。
 2. **不需要手放Wind。** 第一个运行的Area自动建立本世界唯一的`Core/BP_YIXI_GrassWind`，之后的Area共享它。不要再手放重复Wind，也不要同时启用写同一MPC的旧GrassBench入口。
-3. 将GrassArea中心放在已加载的地形上，在Details点击 **BindLandscape**。按钮按中心位置向下查询实际地形碰撞，绑定成功后输出日志会显示完整地形路径。如需指定另一块地形，先选择 **TargetLandscape** 再点击按钮，手动选择优先。`LandscapePath`保存绑定，临时选择随后清空。未探测到地形时会保留已有绑定并提示原因。
-4. 将 **RVTVolume** 指向已有、实际覆盖草区的Volume。设置参数并仅保存明确修改的Actor；进入游戏/PIE后`AutoGenerate`自行生成并管理Tile，不需要MCP持续驱动。使用子关卡地形时，进入游戏前必须让该地形实际加载；模块不负责加载场景。
+3. 将 GrassArea 中心放在已加载的地形上，在 Details 点击 **BindLandscape**。在 **Landscape Binding → Landscape Binding Status** 查看成功绑定的地形路径或未命中原因。遇到多块地形时，可先在 **Target Landscape** 明确选择目标，再点击按钮。`LandscapePath` 保存实际绑定，按钮成功后会清空临时选框。未命中时保留上次绑定。
+4. 将 **RVTVolume** 指向已有、实际覆盖草区的 Volume。保存所在关卡后进入游戏或 PIE，`AutoGenerate` 会生成并管理 Tile。对尚在流送的已绑定地形，启动时会等待最多约 12 秒。超过该时间后，地形加载完成时可对该草区手动执行 `Generate`。场景流送仍由关卡管理。
 
 | GrassArea参数 | 默认值与用途 |
 |---|---|
@@ -58,7 +58,7 @@
 | 主要入口 | `/Game/YIXI_GrassSystem/BP_YIXI_GrassArea` |
 | 示例 | `Examples/L_YIXI_GrassSystem64`；仅示例引用外部`/Game/YIXI/Tests/P04/Night/L_YIXI_T00_Night`、`/Game/LS_YIXI_Master_LightStates`及`GM_Sandbox_Ragdoll`。Night在示例图中Always Loaded，正式Day/Night流送不变 |
 | 必要内部Core | `Core/BP_YIXI_GrassWind`自动建立、每世界共享；`Core/BP_YIXI_GrassTile`由各Area管理 |
-| 生成规则 | `PCG/G_YIXI_Grass`，及正式目录内种植域纹理 |
+| 生成规则 | `PCG/G_YIXI_Grass`、`PCG/BP_YIXI_ProjectGrassToLandscape` 和种植域纹理。投射使用 WorldStatic 查询，只接受当前绑定的 Landscape |
 | 正式材质 | `Materials/M_YIXI_PN`、`M_YIXI_Miscanthus`；10个Instances；`Functions/MF_YIXI_Field`、`MF_YIXI_Bend`；`MPC_YIXI_Wind`、`MPC_YIXI_Quality` |
 | Tall派生网格 | 正式`Meshes/`内两款Miscanthus LOD副本 |
 | 外部源素材 | `/Game/PN_GrassLibrary`四款Low网格及必要表面纹理；`/Game/Project_FW`实际使用纹理和源素材依赖，不复制整包 |
