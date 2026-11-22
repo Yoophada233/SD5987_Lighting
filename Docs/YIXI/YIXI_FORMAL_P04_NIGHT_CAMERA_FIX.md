@@ -15,4 +15,10 @@
 
 ## 验证与人工验收
 
-待构建和重载回读完成后填写。
+- UE 5.8.4 CL58902052 下，`UnrealEditor Win64 Development` 的 `YIXIT00` 正常 UBT 构建成功。重开正式 Master 后，已核对进程载入新 DLL、地图无 Dirty 包，并通过官方 Unreal MCP 回读。
+- 静态回读的 `CharacterCapsule` 半径为 30 cm、半高 86 cm，沿正式路径在 Night Landscape 的 `Z=-5588.824 cm` 命中地面，查询无初始穿透，计算出的 Pawn 中心为 `Z=-5499.824 cm`。V3 的 `V3Host` 绑定可解析，Sequence 无全局 Camera Cut 轨。标记仍为白天 5 秒、夜晚定镜 2 秒、后撤 3.5 秒。核对了 Master、Day 和 Sequence 的哈希，Night 的哈希与用户授权保存后的版本一致。
+- 备份、静态读回和 UBT 日志位于 `Saved/YIXI_Archive/FormalP04_NightCamera_20261122_185324`。
+
+从已打开的 `L_YIXI_P04_StreamingMaster` 正常进入 PIE。到 D07 后重点观看硬切首帧是否在角色后腰、玩具及背部是否可辨、两秒定镜是否稳定，以及后撤是否平滑接入第三人称。此次没有启动 PIE，实际构图与动态连续性待用户确认。
+
+在 Output Log 搜索 `P04_NIGHT_CAMERA`。正常流程各记录一次 `ready`、`cut-first-frame`、`insert-midpoint`、`pullback-start`、`gameplay-restored`。首帧记录读取的是 PlayerCameraManager 已评估的镜头，与准备阶段的拟用机位可直接对照。若提前恢复操控，`refused` 或 `invalid-insert` 会标明失败阶段。
