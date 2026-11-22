@@ -6,6 +6,7 @@
 #include "YIXIStoryToyPickup.generated.h"
 
 class USceneComponent;
+class UStaticMesh;
 class UStaticMeshComponent;
 class UYIXIToyCarryComponent;
 
@@ -24,6 +25,14 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Story|Components")
 	TObjectPtr<USceneComponent> InteractionAnchor;
+
+	/** Optional waist mesh for the formal Night cut. An empty slot keeps the mesh from ToyMesh. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Toy Appearance")
+	TObjectPtr<UStaticMesh> NightWaistMesh;
+
+	/** Maps the Night mesh into the authored toy's local frame before the waist attachment is displayed. Use uniform scale. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Toy Appearance")
+	FTransform NightWaistMeshLocalTransform = FTransform::Identity;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story|Interaction", meta = (ClampMin = "0", Units = "cm"))
 	float DetectionRange = 300.0f;

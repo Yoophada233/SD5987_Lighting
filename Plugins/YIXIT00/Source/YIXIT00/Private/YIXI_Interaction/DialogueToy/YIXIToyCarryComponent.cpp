@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
+#include "Materials/MaterialInterface.h"
 #include "YIXI_Interaction/DialogueToy/YIXIStoryToyPickup.h"
 
 namespace
@@ -83,6 +84,8 @@ void UYIXIToyCarryComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		ToyActor->Destroy();
 	}
 	ToyActor = nullptr;
+	NightWaistMesh = nullptr;
+	ClearPreparedWaist();
 	CarrierPawn.Reset();
 	CarryState = EYIXIToyCarryState::Grounded;
 
@@ -198,6 +201,8 @@ bool UYIXIToyCarryComponent::TryPickup(APawn* Pawn, AYIXIStoryToyPickup& Pickup)
 
 	ToyBaseScale = BaseScale;
 	ToyActor = Prop;
+	NightWaistMesh = Pickup.NightWaistMesh;
+	NightWaistMeshLocalTransform = Pickup.NightWaistMeshLocalTransform;
 	CarrierPawn = Pawn;
 	Prop->OnDestroyed.AddUniqueDynamic(this, &ThisClass::HandleToyDestroyed);
 	Pickup.CommitPickup();
@@ -504,6 +509,7 @@ bool UYIXIToyCarryComponent::RestoreToyToHand()
 	{
 		return false;
 	}
+	CancelPreparedWaistAttachment();
 	FAttachment Hand;
 	if (!RestoreReleaseAttachment(*Pawn) && (!FindAttachment(*Pawn, false, Hand) || !AttachToy(*ToyActor, Hand, ToyBaseScale)))
 	{
@@ -511,7 +517,6 @@ bool UYIXIToyCarryComponent::RestoreToyToHand()
 	}
 	SetComponentTickEnabled(false);
 	CarrierPawn = Pawn;
-	BeforePreparedWaist.Reset();
 	CinematicDropPawn.Reset();
 	CinematicDropFloor.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::HeldHand);
@@ -545,21 +550,81 @@ bool UYIXIToyCarryComponent::PrepareWaistAttachment()
 	if (!Pawn || BeforePreparedWaist.IsSet() || CarryState != EYIXIToyCarryState::Dropped ||
 		CinematicDropPawn.Get() != Pawn || !CanAttachToWaist() || !FindAttachment(*Pawn, true, Attachment))
 		return false;
-	const FTransform FloorPose = ToyActor->GetActorTransform();
-	if (!AttachToy(*ToyActor, Attachment, ToyBaseScale))
+	BeforePreparedWaist = ToyActor->GetActorTransform();
+	if (!AttachToy(*ToyActor, Attachment, ToyBaseScale) || !ApplyPreparedWaistAppearance())
+	{
+		CancelPreparedWaistAttachment();
 		return false;
-	BeforePreparedWaist = FloorPose;
+	}
 	return true;
+}
+
+bool UYIXIToyCarryComponent::ApplyPreparedWaistAppearance()
+{
+	if (!NightWaistMesh)
+		return true;
+
+	const FVector Scale = NightWaistMeshLocalTransform.GetScale3D();
+	if (!IsValid(NightWaistMesh.Get()) || !NightWaistMesh->HasValidRenderData() ||
+		!NightWaistMeshLocalTransform.IsValid() || Scale.X <= UE_KINDA_SMALL_NUMBER ||
+		!FMath::IsNearlyEqual(Scale.X, Scale.Y) || !FMath::IsNearlyEqual(Scale.X, Scale.Z))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YIXI Night waist toy needs a renderable mesh and a valid uniform positive local transform."));
+		return false;
+	}
+
+	UStaticMeshComponent* Mesh = ToyActor->GetStaticMeshComponent();
+	const FTransform NightPose = NightWaistMeshLocalTransform * ToyActor->GetActorTransform();
+	if (!Mesh || !Mesh->GetStaticMesh() || !NightPose.IsValid())
+		return false;
+
+	PreparedDayMesh = Mesh->GetStaticMesh();
+	PreparedDayMaterialOverrides = Mesh->OverrideMaterials;
+	Mesh->SetStaticMesh(NightWaistMesh.Get());
+	if (Mesh->GetStaticMesh() != NightWaistMesh.Get())
+		return false;
+	Mesh->EmptyOverrideMaterials();
+	ToyActor->SetActorTransform(NightPose, false, nullptr, ETeleportType::TeleportPhysics);
+	return ToyActor->GetActorTransform().Equals(NightPose, UE_KINDA_SMALL_NUMBER);
+}
+
+void UYIXIToyCarryComponent::ClearPreparedWaist()
+{
+	BeforePreparedWaist.Reset();
+	PreparedDayMesh = nullptr;
+	PreparedDayMaterialOverrides.Reset();
+}
+
+void UYIXIToyCarryComponent::CommitPreparedWaistAttachment()
+{
+	if (BeforePreparedWaist.IsSet() && CarryState == EYIXIToyCarryState::AttachedAtWaist)
+	{
+		ClearPreparedWaist();
+		CinematicDropPawn.Reset();
+	}
 }
 
 void UYIXIToyCarryComponent::CancelPreparedWaistAttachment()
 {
-	if (BeforePreparedWaist.IsSet() && CarryState == EYIXIToyCarryState::Dropped && GetToyActor())
+	if (!BeforePreparedWaist.IsSet())
+		return;
+
+	if (GetToyActor() && (CarryState == EYIXIToyCarryState::Dropped || CarryState == EYIXIToyCarryState::AttachedAtWaist))
 	{
+		if (UStaticMeshComponent* Mesh = ToyActor->GetStaticMeshComponent(); Mesh && PreparedDayMesh)
+		{
+			Mesh->SetStaticMesh(PreparedDayMesh.Get());
+			Mesh->EmptyOverrideMaterials();
+			for (int32 Index = 0; Index < PreparedDayMaterialOverrides.Num(); ++Index)
+				Mesh->SetMaterial(Index, PreparedDayMaterialOverrides[Index].Get());
+		}
 		ToyActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		ToyActor->SetActorTransform(*BeforePreparedWaist, false, nullptr, ETeleportType::TeleportPhysics);
+		CarrierPawn.Reset();
 	}
-	BeforePreparedWaist.Reset();
+	ClearPreparedWaist();
+	if (CarryState == EYIXIToyCarryState::AttachedAtWaist)
+		SetCarryState(CinematicDropPawn.Get(), EYIXIToyCarryState::Dropped);
 }
 
 bool UYIXIToyCarryComponent::TryAttachToWaist()
@@ -582,15 +647,15 @@ bool UYIXIToyCarryComponent::TryAttachToWaist()
 		const USceneComponent* Root = ToyActor->GetRootComponent();
 		if (!Root || Root->GetAttachParent() != Attachment.Parent || Root->GetAttachSocketName() != Attachment.Socket)
 			return false;
-		BeforePreparedWaist.Reset();
 	}
-	else if (!AttachToy(*ToyActor, Attachment, ToyBaseScale))
+	else
 	{
-		return false;
+		if (!AttachToy(*ToyActor, Attachment, ToyBaseScale))
+			return false;
+		CinematicDropPawn.Reset();
 	}
 
 	CarrierPawn = Pawn;
-	CinematicDropPawn.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::AttachedAtWaist);
 	return true;
 }
@@ -607,6 +672,9 @@ void UYIXIToyCarryComponent::SetCarryState(APawn* Pawn, EYIXIToyCarryState NewSt
 
 void UYIXIToyCarryComponent::HandlePawnChanged(APawn* PreviousPawn, APawn* NewPawn)
 {
+	if (!bEndingPlay && BeforePreparedWaist.IsSet() && CinematicDropPawn.Get() != NewPawn)
+		CancelPreparedWaistAttachment();
+
 	if (!bEndingPlay && CarryState == EYIXIToyCarryState::Falling && GetToyActor())
 	{
 		SetComponentTickEnabled(!bSequenceControlsDrop && IsValid(NewPawn) && CinematicDropPawn.Get() == NewPawn);
@@ -638,6 +706,8 @@ void UYIXIToyCarryComponent::HandleToyDestroyed(AActor* DestroyedActor)
 	{
 		SetComponentTickEnabled(false);
 		CinematicDropPawn.Reset();
+		ClearPreparedWaist();
+		NightWaistMesh = nullptr;
 		ToyActor = nullptr;
 		CarrierPawn.Reset();
 		SetCarryState(GetControlledPawn(), EYIXIToyCarryState::Grounded);

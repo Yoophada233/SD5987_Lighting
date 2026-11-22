@@ -8,7 +8,9 @@
 class APawn;
 class AStaticMeshActor;
 class AYIXIStoryToyPickup;
+class UMaterialInterface;
 class USceneComponent;
+class UStaticMesh;
 
 UENUM(BlueprintType)
 enum class EYIXIToyCarryState : uint8
@@ -119,6 +121,7 @@ public:
 	bool GetWaistMount(USceneComponent*& OutParent, FName& OutSocket) const;
 	// Stage the real attachment without committing the story state or losing the hand recovery.
 	bool PrepareWaistAttachment();
+	void CommitPreparedWaistAttachment();
 	void CancelPreparedWaistAttachment();
 
 	UFUNCTION(BlueprintCallable, Category = "Toy")
@@ -150,6 +153,8 @@ private:
 	bool StartVerticalDrop(const FTransform& LandingPose, float Duration, bool bFromSequence, AActor* RequiredFloor = nullptr);
 	bool MoveVerticalDrop(float Alpha);
 	bool RestoreReleaseAttachment(APawn& Pawn);
+	bool ApplyPreparedWaistAppearance();
+	void ClearPreparedWaist();
 	void SetCarryState(APawn* Pawn, EYIXIToyCarryState NewState);
 
 	UFUNCTION()
@@ -164,6 +169,16 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<AStaticMeshActor> ToyActor;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> NightWaistMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> PreparedDayMesh;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> PreparedDayMaterialOverrides;
+
+	FTransform NightWaistMeshLocalTransform;
 	TWeakObjectPtr<APawn> CarrierPawn;
 	TOptional<FTransform> BeforePreparedWaist;
 	TWeakObjectPtr<APawn> CinematicDropPawn;

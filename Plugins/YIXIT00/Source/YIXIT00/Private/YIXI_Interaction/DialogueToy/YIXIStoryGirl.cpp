@@ -2,6 +2,7 @@
 
 #include "Components/AudioComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -28,6 +29,11 @@ AYIXIStoryGirl::AYIXIStoryGirl()
 	static const ConstructorHelpers::FObjectFinder<UStaticMesh> PlaceholderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	GirlMesh->SetStaticMesh(PlaceholderMesh.Object);
 
+	GirlSkeletalMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("GirlSkeletalMesh"));
+	GirlSkeletalMesh->SetupAttachment(GetRootComponent());
+	GirlSkeletalMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GirlSkeletalMesh->SetGenerateOverlapEvents(false);
+
 	InteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("InteractionAnchor"));
 	InteractionAnchor->SetupAttachment(GetRootComponent());
 	InteractionAnchor->SetRelativeLocation(FVector(0.0, 0.0, 110.0));
@@ -44,13 +50,37 @@ AYIXIStoryGirl::AYIXIStoryGirl()
 	RequestDialogue = LOCTEXT("RequestDialogue", "Could you look for my toy in the back courtyard?");
 }
 
+void AYIXIStoryGirl::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+#if WITH_EDITOR
+	if (GetWorld() && !GetWorld()->IsGameWorld())
+	{
+		GirlMesh->SetIsTemporarilyHiddenInEditor(GirlSkeletalMesh->GetSkeletalMeshAsset() != nullptr);
+	}
+#endif
+}
+
 void AYIXIStoryGirl::BeginPlay()
 {
+	GirlSkeletalMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GirlSkeletalMesh->SetGenerateOverlapEvents(false);
+	GirlSkeletalMesh->SetSimulatePhysics(false);
+	if (GirlSkeletalMesh->GetSkeletalMeshAsset())
+	{
+		GirlMesh->SetHiddenInGame(true);
+	}
 	Super::BeginPlay();
 	if (!bRequestGateSet)
 	{
 		SetRequestAvailable(bStartRequestAvailable);
 	}
+}
+
+void AYIXIStoryGirl::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	StopVoice();
+	Super::EndPlay(EndPlayReason);
 }
 
 void AYIXIStoryGirl::SetRequestAvailable(bool bAvailable)
@@ -66,7 +96,22 @@ void AYIXIStoryGirl::SetUnavailable()
 {
 	bRequestGateSet = true;
 	RequestState = EYIXIStoryGirlState::Unavailable;
-	VoiceAnchor->Stop();
+	StopVoice();
+}
+
+bool AYIXIStoryGirl::IsVoicePlaying() const
+{
+	return IsValid(VoiceAnchor) && VoiceAnchor->IsPlaying();
+}
+
+void AYIXIStoryGirl::StopVoice()
+{
+	// Neither completion nor an explicit stop should change the request gate.
+	if (IsValid(VoiceAnchor))
+	{
+		VoiceAnchor->Stop();
+	}
+	FSubtitleManager::GetSubtitleManager()->KillSubtitles(reinterpret_cast<PTRINT>(this));
 }
 
 bool AYIXIStoryGirl::HasAvailableDialogue() const
@@ -98,6 +143,10 @@ void AYIXIStoryGirl::Interact_Implementation(APawn* Interactor)
 	}
 	else if (RequestState == EYIXIStoryGirlState::Requested)
 	{
+		if (IsVoicePlaying())
+		{
+			return;
+		}
 		PlayVoice(ReminderVoice);
 		if (const APlayerController* Controller = Cast<APlayerController>(Interactor->GetController());
 			Controller && Controller->IsLocalController())
@@ -116,7 +165,7 @@ void AYIXIStoryGirl::Interact_Implementation(APawn* Interactor)
 
 void AYIXIStoryGirl::PlayVoice(USoundBase* Sound)
 {
-	if (!IsValid(Sound) || VoiceVolume <= 0.0f || VoiceAnchor->IsPlaying())
+	if (!IsValid(Sound) || !IsValid(VoiceAnchor) || VoiceVolume <= 0.0f || IsVoicePlaying())
 	{
 		return;
 	}

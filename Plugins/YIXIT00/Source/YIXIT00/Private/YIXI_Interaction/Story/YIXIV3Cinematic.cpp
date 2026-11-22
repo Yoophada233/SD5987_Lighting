@@ -1290,8 +1290,10 @@ void AYIXIV3Cinematic::Tick(float Delta)
                 }
                 return;
             }
+            // The Day image is already held on the render thread. Prepare the actual Night
+            // mesh and its attachment now, so the candidate view measures the visible prop.
             if (!Carry->PrepareWaistAttachment())
-            { Close(false,TEXT("Night waist preparation failed")); return; }
+            { Close(false,TEXT("Night waist attachment or toy appearance preparation failed")); return; }
             if (!BuildFormalNightView(NightView,Reason))
             {
                 UE_LOG(LogYIXIV3,Warning,TEXT("YIXI_P04_REGRESSION refused: %s"),*Reason);
@@ -1303,11 +1305,19 @@ void AYIXIV3Cinematic::Tick(float Delta)
             { Close(false,TEXT("formal Night lighting is unsafe")); return; }
         }
         const int32 Id=Story->RequestV3Cut(Pawn,Toy);
-        if (Id<=0 || (Story->Stage!=EYIXIInteractionStoryStage::V3NightPresentation && !Story->CompleteMatchCut(Id,true))
-            || Carry->GetToyActor()!=Toy || Carry->GetCarryState()!=EYIXIToyCarryState::AttachedAtWaist)
+        // Blueprint listeners can synchronously interrupt during either story notification.
+        if (Shot!=EYIXIV3Shot::Hold || !IsValid(Story) || !IsValid(Carry) || !IsValid(Toy)) return;
+        const bool bStoryCommitted=Id>0 && (Story->Stage==EYIXIInteractionStoryStage::V3NightPresentation ||
+            Story->CompleteMatchCut(Id,true));
+        if (Shot!=EYIXIV3Shot::Hold || !IsValid(Story) || !IsValid(Carry) || !IsValid(Toy)) return;
+        if (!bStoryCommitted || Carry->GetToyActor()!=Toy || Carry->GetCarryState()!=EYIXIToyCarryState::AttachedAtWaist)
         { Close(false,TEXT("cut refused or waist attachment failed")); return; }
         bCut=true;
-        if (Transition) Transition->CommitFormalCut(Pawn);
+        if (Transition)
+        {
+            Carry->CommitPreparedWaistAttachment();
+            Transition->CommitFormalCut(Pawn);
+        }
         else ShowNight(true);
         if (!Transition)
         {
@@ -1438,6 +1448,7 @@ void AYIXIV3Cinematic::BeginFormalNightPullback()
 void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
 {
     if (bClosing) return;
+    TGuardValue<bool> Guard(bClosing,true);
     if (!bCompleted && FormalStory && IsValid(Carry)) Carry->CancelPreparedWaistAttachment();
     const bool bSamePawn=IsValid(Pawn) && IsValid(PC) && PC->GetPawn()==Pawn;
     if (!bCompleted && FormalStory && bMoved && bSamePawn && !bEndingPresentationPlay && Shot!=EYIXIV3Shot::ReturningToDay)
@@ -1454,7 +1465,6 @@ void AYIXIV3Cinematic::Close(bool bCompleted, const TCHAR* Reason)
             return;
         }
     }
-    TGuardValue<bool> Guard(bClosing,true);
     SetActorTickEnabled(false);
     RestoreWaistAttachment();
     ReleaseParticipantPose();

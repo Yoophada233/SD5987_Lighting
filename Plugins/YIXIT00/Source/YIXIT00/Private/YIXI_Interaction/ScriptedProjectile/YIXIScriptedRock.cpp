@@ -4,9 +4,11 @@
 #include "CollisionShape.h"
 #include "Components/AudioComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/DecalComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Curves/CurveFloat.h"
+#include "Engine/DecalActor.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/TargetPoint.h"
 #include "Engine/World.h"
@@ -14,6 +16,8 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogYIXIScriptedRock, Log, All);
 
 namespace
 {
@@ -86,6 +90,22 @@ AYIXIScriptedRock::AYIXIScriptedRock()
 	Blocker->SetHiddenInGame(true);
 }
 
+void AYIXIScriptedRock::BeginPlay()
+{
+	if (UDecalComponent* Decal = GetImpactDecalComponent())
+	{
+		SetImpactDecalHidden(true);
+		// The story owns the lifetime of the crack. Clear an authored fade-out timer in play.
+		Decal->SetFadeOut(0.0f, 0.0f, false);
+	}
+	else
+	{
+		UE_LOG(LogYIXIScriptedRock, Display, TEXT("%s: assign an Impact Decal at this rock's landing site to show an impact crack."),
+			*GetPathName());
+	}
+	Super::BeginPlay();
+}
+
 bool AYIXIScriptedRock::Launch(int32 RequestId)
 {
 	if (RequestId <= 0 || RockState != EYIXIScriptedRockState::Idle || !HasActorBegunPlay()
@@ -132,6 +152,8 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 	{
 		return false;
 	}
+	RestMeshTransform = RockMesh->GetRelativeTransform();
+	RestBlockerTransform = Blocker->GetRelativeTransform();
 	MeshAlignment = Alignment;
 	LaunchPose = Start;
 	LandingPose = End;
@@ -155,6 +177,32 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 	PlaySpatialCue(*FlightAudio, FlightSound, FlightVolume, FlightAttenuation);
 	OnLaunched.Broadcast(ActiveRequestId);
 	return true;
+}
+
+void AYIXIScriptedRock::ResetRock()
+{
+	if (!HasActorBegunPlay() || IsActorBeingDestroyed())
+	{
+		return;
+	}
+
+	const bool bNeedsRestPose = RockState != EYIXIScriptedRockState::Idle;
+	RockState = EYIXIScriptedRockState::Idle;
+	ActiveRequestId = 0;
+	ElapsedTime = 0.0f;
+	bImpactOccurred = false;
+	bPendingBlockage = false;
+	SetActorTickEnabled(false);
+	FlightAudio->Stop();
+	ImpactAudio->Stop();
+	Blocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RockMesh->SetHiddenInGame(true);
+	if (bNeedsRestPose)
+	{
+		RockMesh->SetRelativeTransform(RestMeshTransform);
+		Blocker->SetRelativeTransform(RestBlockerTransform);
+	}
+	SetImpactDecalHidden(true);
 }
 
 bool AYIXIScriptedRock::IsBlockageReady() const
@@ -218,6 +266,20 @@ float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
 	return 4.0f * Alpha * (1.0f - Alpha);
 }
 
+UDecalComponent* AYIXIScriptedRock::GetImpactDecalComponent() const
+{
+	return IsValid(ImpactDecal) && !ImpactDecal->IsActorBeingDestroyed() && ImpactDecal->GetWorld() == GetWorld()
+		? ImpactDecal->GetDecal() : nullptr;
+}
+
+void AYIXIScriptedRock::SetImpactDecalHidden(bool bHidden)
+{
+	if (GetImpactDecalComponent())
+	{
+		ImpactDecal->SetActorHiddenInGame(bHidden);
+	}
+}
+
 void AYIXIScriptedRock::FinishTravel()
 {
 	RockMesh->SetWorldTransform(MakeRockMeshPose(LandingPose.GetLocation(), LandingPose.GetRotation()));
@@ -233,6 +295,7 @@ void AYIXIScriptedRock::FinishTravel()
 	FlightAudio->Stop();
 	ImpactAudio->SetWorldLocation(RockMesh->GetComponentLocation());
 	PlaySpatialCue(*ImpactAudio, ImpactSound, ImpactVolume, ImpactAttenuation);
+	SetImpactDecalHidden(false);
 
 	// Consumers see the landed pose before clearance can fire its separate event.
 	OnImpact.Broadcast(ActiveRequestId);

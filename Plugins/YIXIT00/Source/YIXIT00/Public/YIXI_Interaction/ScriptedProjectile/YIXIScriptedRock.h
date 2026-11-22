@@ -4,10 +4,12 @@
 #include "GameFramework/Actor.h"
 #include "YIXIScriptedRock.generated.h"
 
+class ADecalActor;
 class ATargetPoint;
 class UAudioComponent;
 class UBoxComponent;
 class UCurveFloat;
+class UDecalComponent;
 class USceneComponent;
 class USoundAttenuation;
 class USoundBase;
@@ -37,6 +39,10 @@ public:
 	/** Starts this instance once. A positive request ID is echoed by its events. */
 	UFUNCTION(BlueprintCallable, Category = "YIXI|Scripted Rock")
 	bool Launch(int32 RequestId);
+
+	/** Cancels flight or clears a previous impact when the owning story is reset. */
+	UFUNCTION(BlueprintCallable, Category = "YIXI|Scripted Rock")
+	void ResetRock();
 
 	UFUNCTION(BlueprintPure, Category = "YIXI|Scripted Rock")
 	int32 GetActiveRequestId() const { return ActiveRequestId; }
@@ -90,6 +96,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Scripted Rock")
 	bool bEnableBlockageAfterImpact = false;
 
+	/** Pick the existing crack decal at this rock's landing site. It stays visible in the editor. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Impact")
+	TObjectPtr<ADecalActor> ImpactDecal;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
 	TObjectPtr<USoundBase> LaunchSound;
 
@@ -131,12 +141,15 @@ public:
 	EYIXIScriptedRockState RockState = EYIXIScriptedRockState::Idle;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	float EvaluateVerticalShape(float Alpha) const;
 	FTransform MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const;
+	UDecalComponent* GetImpactDecalComponent() const;
+	void SetImpactDecalHidden(bool bHidden);
 	void FinishTravel();
 	void TryEnableBlockage();
 
@@ -144,6 +157,8 @@ private:
 	FTransform LandingPose;
 	FTransform LandingBlockerPose;
 	FTransform MeshAlignment;
+	FTransform RestMeshTransform;
+	FTransform RestBlockerTransform;
 	float ElapsedTime = 0.0f;
 	float ActiveDuration = 0.0f;
 	float ActiveLift = 0.0f;
