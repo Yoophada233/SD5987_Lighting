@@ -511,6 +511,7 @@ bool UYIXIToyCarryComponent::RestoreToyToHand()
 	}
 	SetComponentTickEnabled(false);
 	CarrierPawn = Pawn;
+	BeforePreparedWaist.Reset();
 	CinematicDropPawn.Reset();
 	CinematicDropFloor.Reset();
 	SetCarryState(Pawn, EYIXIToyCarryState::HeldHand);
@@ -526,16 +527,39 @@ bool UYIXIToyCarryComponent::CanAttachToWaist() const
 		&& GetToyActor() && FindAttachment(*Pawn, true, Attachment);
 }
 
-bool UYIXIToyCarryComponent::GetWaistPreviewTransform(FTransform& OutPose) const
+bool UYIXIToyCarryComponent::GetWaistMount(USceneComponent*& OutParent, FName& OutSocket) const
 {
 	APawn* Pawn = GetControlledPawn();
 	FAttachment Attachment;
 	if (!Pawn || !CanAttachToWaist() || !FindAttachment(*Pawn, true, Attachment))
 		return false;
-	const FTransform Parent = Attachment.Parent->GetSocketTransform(Attachment.Socket);
-	OutPose = Attachment.RelativePose * Parent;
-	OutPose.SetScale3D(ToyBaseScale * Attachment.RelativePose.GetScale3D());
-	return OutPose.IsValid();
+	OutParent = Attachment.Parent;
+	OutSocket = Attachment.Socket;
+	return true;
+}
+
+bool UYIXIToyCarryComponent::PrepareWaistAttachment()
+{
+	APawn* Pawn = GetControlledPawn();
+	FAttachment Attachment;
+	if (!Pawn || BeforePreparedWaist.IsSet() || CarryState != EYIXIToyCarryState::Dropped ||
+		CinematicDropPawn.Get() != Pawn || !CanAttachToWaist() || !FindAttachment(*Pawn, true, Attachment))
+		return false;
+	const FTransform FloorPose = ToyActor->GetActorTransform();
+	if (!AttachToy(*ToyActor, Attachment, ToyBaseScale))
+		return false;
+	BeforePreparedWaist = FloorPose;
+	return true;
+}
+
+void UYIXIToyCarryComponent::CancelPreparedWaistAttachment()
+{
+	if (BeforePreparedWaist.IsSet() && CarryState == EYIXIToyCarryState::Dropped && GetToyActor())
+	{
+		ToyActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		ToyActor->SetActorTransform(*BeforePreparedWaist, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	BeforePreparedWaist.Reset();
 }
 
 bool UYIXIToyCarryComponent::TryAttachToWaist()
@@ -549,7 +573,18 @@ bool UYIXIToyCarryComponent::TryAttachToWaist()
 	}
 
 	FAttachment Attachment;
-	if (!FindAttachment(*Pawn, true, Attachment) || !AttachToy(*ToyActor, Attachment, ToyBaseScale))
+	if (!FindAttachment(*Pawn, true, Attachment))
+	{
+		return false;
+	}
+	if (BeforePreparedWaist.IsSet())
+	{
+		const USceneComponent* Root = ToyActor->GetRootComponent();
+		if (!Root || Root->GetAttachParent() != Attachment.Parent || Root->GetAttachSocketName() != Attachment.Socket)
+			return false;
+		BeforePreparedWaist.Reset();
+	}
+	else if (!AttachToy(*ToyActor, Attachment, ToyBaseScale))
 	{
 		return false;
 	}
