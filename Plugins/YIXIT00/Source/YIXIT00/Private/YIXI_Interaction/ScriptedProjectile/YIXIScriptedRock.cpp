@@ -124,14 +124,17 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 		return false;
 	}
 
-	// Keep the mesh's authored scale in both poses. Anchors determine position and rotation.
-	const FVector MeshScale = RockMesh->GetComponentScale();
-	if (MeshScale.ContainsNaN())
+	// Keep the visual alignment separate from the anchor path and the blockage volume.
+	FTransform Alignment = RockMesh->GetRelativeTransform();
+	Alignment.SetTranslation(Alignment.GetTranslation() * GetRootComponent()->GetComponentScale());
+	Alignment.SetScale3D(RockMesh->GetComponentScale());
+	if (!Alignment.IsValid())
 	{
 		return false;
 	}
-	LaunchPose = FTransform(Start.GetRotation(), Start.GetLocation(), MeshScale);
-	LandingPose = FTransform(End.GetRotation(), End.GetLocation(), MeshScale);
+	MeshAlignment = Alignment;
+	LaunchPose = Start;
+	LandingPose = End;
 	LandingBlockerPose = BlockageTransform;
 	ActiveRequestId = RequestId;
 	ActiveDuration = TravelDuration;
@@ -141,13 +144,13 @@ bool AYIXIScriptedRock::Launch(int32 RequestId)
 
 	Blocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	RockMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	RockMesh->SetWorldTransform(LaunchPose);
+	RockMesh->SetWorldTransform(MakeRockMeshPose(LaunchPose.GetLocation(), LaunchPose.GetRotation()));
 	RockMesh->SetHiddenInGame(false);
 	SetActorTickEnabled(true);
 
 	if (LaunchSound)
 	{
-		UGameplayStatics::PlaySoundAtLocation(this, LaunchSound, LaunchPose.GetLocation());
+		UGameplayStatics::PlaySoundAtLocation(this, LaunchSound, RockMesh->GetComponentLocation());
 	}
 	PlaySpatialCue(*FlightAudio, FlightSound, FlightVolume, FlightAttenuation);
 	OnLaunched.Broadcast(ActiveRequestId);
@@ -189,7 +192,14 @@ void AYIXIScriptedRock::Tick(float DeltaSeconds)
 	const FVector BasePosition = FMath::Lerp(LaunchPose.GetLocation(), LandingPose.GetLocation(), Alpha);
 	const FVector Position = BasePosition + FVector::UpVector * (ActiveLift * EvaluateVerticalShape(Alpha));
 	const FQuat Rotation = FQuat::Slerp(LaunchPose.GetRotation(), LandingPose.GetRotation(), Alpha);
-	RockMesh->SetWorldLocationAndRotation(Position, Rotation);
+	const FTransform MeshPose = MakeRockMeshPose(Position, Rotation);
+	RockMesh->SetWorldLocationAndRotation(MeshPose.GetLocation(), MeshPose.GetRotation());
+}
+
+FTransform AYIXIScriptedRock::MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const
+{
+	return FTransform(PathRotation * MeshAlignment.GetRotation(),
+		PathLocation + PathRotation.RotateVector(MeshAlignment.GetTranslation()), MeshAlignment.GetScale3D());
 }
 
 float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
@@ -210,7 +220,7 @@ float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
 
 void AYIXIScriptedRock::FinishTravel()
 {
-	RockMesh->SetWorldTransform(LandingPose);
+	RockMesh->SetWorldTransform(MakeRockMeshPose(LandingPose.GetLocation(), LandingPose.GetRotation()));
 	bImpactOccurred = true;
 	RockState = bPendingBlockage ? EYIXIScriptedRockState::WaitingForClearance
 		: EYIXIScriptedRockState::Impacted;
@@ -221,7 +231,7 @@ void AYIXIScriptedRock::FinishTravel()
 	}
 
 	FlightAudio->Stop();
-	ImpactAudio->SetWorldLocation(LandingPose.GetLocation());
+	ImpactAudio->SetWorldLocation(RockMesh->GetComponentLocation());
 	PlaySpatialCue(*ImpactAudio, ImpactSound, ImpactVolume, ImpactAttenuation);
 
 	// Consumers see the landed pose before clearance can fire its separate event.

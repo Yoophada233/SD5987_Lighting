@@ -26,6 +26,7 @@ AYIXIInteractiveDoor::AYIXIInteractiveDoor()
 	SetRootComponent(DoorRoot);
 	DoorFrame = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorFrame"));
 	DoorFrame->SetupAttachment(DoorRoot);
+	DoorFrame->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 	WhiteboxLeftJamb = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WhiteboxLeftJamb"));
 	WhiteboxLeftJamb->SetupAttachment(DoorRoot);
 	WhiteboxRightJamb = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WhiteboxRightJamb"));
@@ -38,6 +39,7 @@ AYIXIInteractiveDoor::AYIXIInteractiveDoor()
 	DoorLeaf = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorLeaf"));
 	DoorLeaf->SetupAttachment(LeafMount);
 	DoorLeaf->SetMobility(EComponentMobility::Movable);
+	DoorLeaf->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 	HandleMarker = CreateDefaultSubobject<USceneComponent>(TEXT("HandleMarker"));
 	HandleMarker->SetupAttachment(LeafMount);
 	InteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("InteractionAnchor"));
@@ -84,8 +86,6 @@ void AYIXIInteractiveDoor::ApplyComponentConfiguration()
 	DoorFrame->SetStaticMesh(DoorFrameMesh);
 	DoorFrame->SetRelativeLocation(bWhiteboxFrame ? FVector(0.0, 0.0, 215.0) : FrameMeshOffset);
 	DoorFrame->SetRelativeScale3D(bWhiteboxFrame ? FVector(1.2, 0.2, 0.1) : FrameMeshScale);
-	DoorFrame->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
-	DoorFrame->SetCollisionEnabled(DoorFrameMesh ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	for (UStaticMeshComponent* Jamb : { WhiteboxLeftJamb.Get(), WhiteboxRightJamb.Get() })
 	{
 		Jamb->SetStaticMesh(bWhiteboxFrame ? WhiteboxCube.Get() : nullptr);
@@ -99,8 +99,6 @@ void AYIXIInteractiveDoor::ApplyComponentConfiguration()
 	LeafMount->SetRelativeLocation(LeafCenterOffset);
 	DoorLeaf->SetStaticMesh(DoorLeafMesh);
 	DoorLeaf->SetRelativeScale3D(LeafMeshScale);
-	DoorLeaf->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
-	DoorLeaf->SetCollisionEnabled(DoorLeafMesh ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	HandleMarker->SetRelativeLocation(HandleMarkerOffset);
 	DetectionPreview->SetRelativeLocation(PromptAnchorOffset);
 	DetectionPreview->SetSphereRadius(FMath::Max(0.0f, DetectionRange), false);
@@ -254,7 +252,9 @@ bool AYIXIInteractiveDoor::WouldCloseThroughPawn(float NewFraction) const
 {
 	UWorld* World = GetWorld();
 	const UStaticMesh* Mesh = DoorLeaf->GetStaticMesh();
-	if (!World || !Mesh || FMath::IsNearlyEqual(OpenFraction, NewFraction, UE_SMALL_NUMBER))
+	if (!World || !Mesh || !CollisionEnabledHasQuery(DoorLeaf->GetCollisionEnabled())
+		|| DoorLeaf->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block
+		|| FMath::IsNearlyEqual(OpenFraction, NewFraction, UE_SMALL_NUMBER))
 	{
 		return false;
 	}

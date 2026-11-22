@@ -22,8 +22,6 @@ namespace
 	{
 		Component.SetStaticMesh(Mesh);
 		Component.SetRelativeTransform(RelativeTransform);
-		Component.SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
-		Component.SetCollisionEnabled(Mesh ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	}
 
 	FQuat HingeRotationAt(const FRotator& ClosedRotation, float SwingDegrees, float Fraction)
@@ -65,18 +63,21 @@ AYIXIDoubleDoor::AYIXIDoubleDoor()
 
 	DoorFrame = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorFrame"));
 	DoorFrame->SetupAttachment(DoorFrameRoot);
+	DoorFrame->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 
 	LeftHinge = CreateDefaultSubobject<USceneComponent>(TEXT("LeftHinge"));
 	LeftHinge->SetupAttachment(DoorFrameRoot);
 	LeftLeaf = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LeftLeaf"));
 	LeftLeaf->SetupAttachment(LeftHinge);
 	LeftLeaf->SetMobility(EComponentMobility::Movable);
+	LeftLeaf->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 
 	RightHinge = CreateDefaultSubobject<USceneComponent>(TEXT("RightHinge"));
 	RightHinge->SetupAttachment(DoorFrameRoot);
 	RightLeaf = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RightLeaf"));
 	RightLeaf->SetupAttachment(RightHinge);
 	RightLeaf->SetMobility(EComponentMobility::Movable);
+	RightLeaf->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 
 	CenterInteractionAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("CenterInteractionAnchor"));
 	CenterInteractionAnchor->SetupAttachment(DoorFrameRoot);
@@ -261,7 +262,8 @@ bool AYIXIDoubleDoor::WouldCloseLeafThroughPawn(const USceneComponent& Hinge, co
 	UWorld* World = GetWorld();
 	const UStaticMesh* Mesh = Leaf.GetStaticMesh();
 	const float SwingDegrees = FMath::Abs(OpenAngle * (NewFraction - OpenFraction));
-	if (!World || !Mesh || Leaf.GetCollisionEnabled() == ECollisionEnabled::NoCollision || SwingDegrees <= 0.0f)
+	if (!World || !Mesh || !CollisionEnabledHasQuery(Leaf.GetCollisionEnabled())
+		|| Leaf.GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block || SwingDegrees <= 0.0f)
 	{
 		return false;
 	}

@@ -59,14 +59,15 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Markers")
 	TObjectPtr<ATargetPoint> FlightImpactMarker;
 
-	/** World-space offset from the assigned start marker to the rock mesh pivot. */
+	/** World-space offset from the assigned start marker to the trajectory pivot. */
 	UPROPERTY(EditInstanceOnly, Category = "YIXI|Scripted Rock|Markers", meta = (Units = "cm"))
 	FVector StartMarkerOffset = FVector::ZeroVector;
 
-	/** World-space offset from the assigned impact marker to the rock mesh pivot. */
+	/** World-space offset from the assigned impact marker to the trajectory pivot. */
 	UPROPERTY(EditInstanceOnly, Category = "YIXI|Scripted Rock|Markers", meta = (Units = "cm"))
 	FVector ImpactMarkerOffset = FVector::ZeroVector;
 
+	/** Edit this component's mesh, materials and transform. Its local alignment follows the trajectory. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|Scripted Rock")
 	TObjectPtr<UStaticMeshComponent> RockMesh;
 
@@ -135,12 +136,14 @@ protected:
 
 private:
 	float EvaluateVerticalShape(float Alpha) const;
+	FTransform MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const;
 	void FinishTravel();
 	void TryEnableBlockage();
 
 	FTransform LaunchPose;
 	FTransform LandingPose;
 	FTransform LandingBlockerPose;
+	FTransform MeshAlignment;
 	float ElapsedTime = 0.0f;
 	float ActiveDuration = 0.0f;
 	float ActiveLift = 0.0f;

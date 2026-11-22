@@ -67,10 +67,11 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Door|Components")
 	TObjectPtr<USphereComponent> DetectionPreview;
 
-	/** The basic Cube uses a whitebox lintel and jambs. Any other mesh replaces that assembly. */
+	/** The basic Cube uses a whitebox lintel and jambs. Clear this to omit the frame. Set rotation, material overrides and collision on the DoorFrame component. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Structure")
 	TObjectPtr<UStaticMesh> DoorFrameMesh;
 
+	/** Set mesh-local rotation, material overrides and collision on the DoorLeaf component. Use ClosedRotation to orient the hinge in its closed state. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Structure")
 	TObjectPtr<UStaticMesh> DoorLeafMesh;
 
