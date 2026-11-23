@@ -9,7 +9,6 @@ class ATargetPoint;
 class UAudioComponent;
 class UBoxComponent;
 class UCurveFloat;
-class UDecalComponent;
 class USceneComponent;
 class USoundAttenuation;
 class USoundBase;
@@ -100,6 +99,10 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Impact")
 	TObjectPtr<ADecalActor> ImpactDecal;
 
+	/** Additional placed decals shown at the same impact and hidden again when the rock resets. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Impact")
+	TArray<TObjectPtr<ADecalActor>> AdditionalImpactDecals;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Audio")
 	TObjectPtr<USoundBase> LaunchSound;
 
@@ -148,8 +151,7 @@ protected:
 private:
 	float EvaluateVerticalShape(float Alpha) const;
 	FTransform MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const;
-	UDecalComponent* GetImpactDecalComponent() const;
-	void SetImpactDecalHidden(bool bInHidden);
+	void SetImpactDecalsHidden(bool bHidden, bool bClearFadeOut = false);
 	void FinishTravel();
 	void TryEnableBlockage();
 

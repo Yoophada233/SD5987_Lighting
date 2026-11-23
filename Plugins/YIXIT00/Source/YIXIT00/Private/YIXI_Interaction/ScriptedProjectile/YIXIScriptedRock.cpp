@@ -92,17 +92,7 @@ AYIXIScriptedRock::AYIXIScriptedRock()
 
 void AYIXIScriptedRock::BeginPlay()
 {
-	if (UDecalComponent* Decal = GetImpactDecalComponent())
-	{
-		SetImpactDecalHidden(true);
-		// The story owns the lifetime of the crack. Clear an authored fade-out timer in play.
-		Decal->SetFadeOut(0.0f, 0.0f, false);
-	}
-	else
-	{
-		UE_LOG(LogYIXIScriptedRock, Display, TEXT("%s: assign an Impact Decal at this rock's landing site to show an impact crack."),
-			*GetPathName());
-	}
+	SetImpactDecalsHidden(true, true);
 	Super::BeginPlay();
 }
 
@@ -202,7 +192,7 @@ void AYIXIScriptedRock::ResetRock()
 		RockMesh->SetRelativeTransform(RestMeshTransform);
 		Blocker->SetRelativeTransform(RestBlockerTransform);
 	}
-	SetImpactDecalHidden(true);
+	SetImpactDecalsHidden(true);
 }
 
 bool AYIXIScriptedRock::IsBlockageReady() const
@@ -266,17 +256,37 @@ float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
 	return 4.0f * Alpha * (1.0f - Alpha);
 }
 
-UDecalComponent* AYIXIScriptedRock::GetImpactDecalComponent() const
+void AYIXIScriptedRock::SetImpactDecalsHidden(bool bHidden, bool bClearFadeOut)
 {
-	return IsValid(ImpactDecal) && !ImpactDecal->IsActorBeingDestroyed() && ImpactDecal->GetWorld() == GetWorld()
-		? ImpactDecal->GetDecal() : nullptr;
-}
-
-void AYIXIScriptedRock::SetImpactDecalHidden(bool bInHidden)
-{
-	if (GetImpactDecalComponent())
+	TArray<ADecalActor*, TInlineAllocator<4>> DecalActors;
+	DecalActors.Add(ImpactDecal.Get());
+	for (ADecalActor* AdditionalDecal : AdditionalImpactDecals)
 	{
-		ImpactDecal->SetActorHiddenInGame(bInHidden);
+		DecalActors.AddUnique(AdditionalDecal);
+	}
+
+	bool bFoundDecal = false;
+	for (ADecalActor* DecalActor : DecalActors)
+	{
+		if (!IsValid(DecalActor) || DecalActor->IsActorBeingDestroyed() || DecalActor->GetWorld() != GetWorld())
+		{
+			continue;
+		}
+		if (UDecalComponent* Decal = DecalActor->GetDecal())
+		{
+			bFoundDecal = true;
+			DecalActor->SetActorHiddenInGame(bHidden);
+			if (bClearFadeOut)
+			{
+				// The story owns decal lifetime. Cancel any authored fade-out timer when play starts.
+				Decal->SetFadeOut(0.0f, 0.0f, false);
+			}
+		}
+	}
+	if (bClearFadeOut && !bFoundDecal)
+	{
+		UE_LOG(LogYIXIScriptedRock, Display, TEXT("%s: assign an Impact Decal at this rock's landing site to show an impact crack."),
+			*GetPathName());
 	}
 }
 
@@ -295,7 +305,7 @@ void AYIXIScriptedRock::FinishTravel()
 	FlightAudio->Stop();
 	ImpactAudio->SetWorldLocation(RockMesh->GetComponentLocation());
 	PlaySpatialCue(*ImpactAudio, ImpactSound, ImpactVolume, ImpactAttenuation);
-	SetImpactDecalHidden(false);
+	SetImpactDecalsHidden(false);
 
 	// Consumers see the landed pose before clearance can fire its separate event.
 	OnImpact.Broadcast(ActiveRequestId);
