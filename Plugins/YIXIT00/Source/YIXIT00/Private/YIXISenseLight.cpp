@@ -3,7 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SphereComponent.h"
-#include "Components/PointLightComponent.h"
+#include "Components/RectLightComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -38,9 +38,24 @@ AYIXISenseLight::AYIXISenseLight()
 	LightAnchor->SetupAttachment(BodyMesh);
 	LightAnchor->SetRelativeLocation(FVector(0.0f, 0.0f, 100.0f));
 
-	SenseLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("SenseLight"));
-	SenseLight->SetupAttachment(LightAnchor);
-	SenseLight->SetMobility(EComponentMobility::Movable);
+	RectLight0 = CreateDefaultSubobject<URectLightComponent>(TEXT("RectLight0"));
+	RectLight0->SetupAttachment(LightAnchor);
+	RectLight0->SetMobility(EComponentMobility::Movable);
+
+	RectLight1 = CreateDefaultSubobject<URectLightComponent>(TEXT("RectLight1"));
+	RectLight1->SetupAttachment(LightAnchor);
+	RectLight1->SetMobility(EComponentMobility::Movable);
+	RectLight1->SetRelativeRotation(FRotator(0.0f, 90.0f, 0.0f));
+
+	RectLight2 = CreateDefaultSubobject<URectLightComponent>(TEXT("RectLight2"));
+	RectLight2->SetupAttachment(LightAnchor);
+	RectLight2->SetMobility(EComponentMobility::Movable);
+	RectLight2->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+
+	RectLight3 = CreateDefaultSubobject<URectLightComponent>(TEXT("RectLight3"));
+	RectLight3->SetupAttachment(LightAnchor);
+	RectLight3->SetMobility(EComponentMobility::Movable);
+	RectLight3->SetRelativeRotation(FRotator(0.0f, 270.0f, 0.0f));
 }
 
 void AYIXISenseLight::OnConstruction(const FTransform& Transform)
@@ -101,17 +116,16 @@ void AYIXISenseLight::ToggleLight()
 
 void AYIXISenseLight::ApplyLightState()
 {
-	if (!IsValid(SenseLight))
-	{
-		return;
-	}
+	URectLightComponent* Lights[] = { RectLight0, RectLight1, RectLight2, RectLight3 };
 	// 编辑器预览时灯光保持可见，方便调位置/强度；进游戏才跟感应开关走。
-	if (!HasActorBegunPlay())
+	const bool bVisible = !HasActorBegunPlay() ? true : bLightOn;
+	for (URectLightComponent* Light : Lights)
 	{
-		SenseLight->SetVisibility(true);
-		return;
+		if (IsValid(Light))
+		{
+			Light->SetVisibility(bVisible);
+		}
 	}
-	SenseLight->SetVisibility(bLightOn);
 }
 
 APawn* AYIXISenseLight::GetLocalPawn() const

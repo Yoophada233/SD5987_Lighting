@@ -7,15 +7,16 @@
 class USceneComponent;
 class UStaticMeshComponent;
 class USphereComponent;
-class UPointLightComponent;
+class URectLightComponent;
 
 /**
- * 感应式点光源（感应灯）：玩家走近自动亮，之后常亮不再熄灭。
+ * 感应式矩形光源（感应灯）：玩家走近自动亮，之后常亮不再熄灭。
  *
  * 逻辑对标 AYIXISenseFire，只是把"点火"换成"开灯"，且去掉了离开熄灭：
  * - BodyMesh：随时替换任意 StaticMesh 模型。
- * - LightAnchor：在视口拖动，改灯光在模型上的位置（挂在 BodyMesh 下）。
- * - SenseLight：点光源本体，位置、强度、颜色、范围等直接在细节面板调组件即可。
+ * - LightAnchor：在视口拖动，改灯光组在模型上的位置（挂在 BodyMesh 下）。
+ * - RectLight0~3：四个矩形光源本体，都跟 LightAnchor 走；
+ *   位置、朝向、强度、颜色、宽高等直接在细节面板调各组件即可。
  * - SenseRadius：感应半径，编辑器里的球体显示的也是这个范围。
  */
 UCLASS(Blueprintable, BlueprintType)
@@ -46,9 +47,18 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|SenseLight|Light")
 	TObjectPtr<USceneComponent> LightAnchor;
 
-	/** 点光源：只跟 LightAnchor 走；位置、强度、颜色、范围等直接在细节面板调组件即可。 */
+	/** 四个矩形光源：都跟 LightAnchor 走；位置、朝向、强度、颜色、宽高等直接在细节面板调各组件即可。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|SenseLight|Light")
-	TObjectPtr<UPointLightComponent> SenseLight;
+	TObjectPtr<URectLightComponent> RectLight0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|SenseLight|Light")
+	TObjectPtr<URectLightComponent> RectLight1;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|SenseLight|Light")
+	TObjectPtr<URectLightComponent> RectLight2;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YIXI|SenseLight|Light")
+	TObjectPtr<URectLightComponent> RectLight3;
 
 	/** 感应半径：玩家进入这个距离自动开灯，编辑器里的球体显示的也是这个范围。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|SenseLight|Sense", meta = (ClampMin = "0.0", Units = "cm"))

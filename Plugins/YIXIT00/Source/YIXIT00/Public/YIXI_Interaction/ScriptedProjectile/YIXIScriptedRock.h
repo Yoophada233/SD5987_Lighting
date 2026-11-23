@@ -149,7 +149,7 @@ private:
 	float EvaluateVerticalShape(float Alpha) const;
 	FTransform MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const;
 	UDecalComponent* GetImpactDecalComponent() const;
-	void SetImpactDecalHidden(bool bHideDecal);
+	void SetImpactDecalHidden(bool bInHidden);
 	void FinishTravel();
 	void TryEnableBlockage();
 

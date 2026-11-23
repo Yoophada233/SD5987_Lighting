@@ -111,6 +111,9 @@ void AYIXIStoryGirl::StopVoice()
 	{
 		VoiceAnchor->Stop();
 	}
+	// NOTE: FSubtitleManager::KillSubtitles is not exported (no ENGINE_API) in 5.8,
+	// so calling it breaks the link. Stopping the voice is enough; active cues
+	// expire on their own (reminder uses a 3s duration).
 }
 
 bool AYIXIStoryGirl::HasAvailableDialogue() const
