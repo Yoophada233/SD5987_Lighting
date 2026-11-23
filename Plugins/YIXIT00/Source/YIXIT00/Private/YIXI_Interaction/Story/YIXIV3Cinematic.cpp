@@ -996,43 +996,55 @@ bool AYIXIV3Cinematic::BuildFormalNightView(FMinimalViewInfo& View, FString& Rea
     const FBox WorldBox=Mesh->GetStaticMesh()->GetBoundingBox().TransformBy(ToyFrame);
     const FVector Center=ToyFrame.TransformPosition(Mesh->GetStaticMesh()->GetBounds().Origin);
     const FRotator Yaw(0,Pawn->GetActorRotation().Yaw,0);
-    FVector Rear=NightCloseupDirection;
-    Rear.X=FMath::Min(-.25,Rear.X);
-    const FVector Eye=Center+Yaw.RotateVector(Rear.GetSafeNormal())*CloseupDistance;
     const auto* Capsule=Cast<UCapsuleComponent>(Pawn->GetRootComponent());
     const auto* PawnMesh=FormalPoseMesh.Get();
     const FVector Pelvis=PawnMesh ? PawnMesh->GetSocketLocation(TEXT("pelvis")) : Pawn->GetActorLocation();
     const FVector PawnCenter=Pawn->GetActorLocation();
-    if (!Capsule || Center.ContainsNaN() || Eye.ContainsNaN() || !WorldBox.IsValid ||
+    if (!Capsule || Center.ContainsNaN() || !WorldBox.IsValid ||
         FMath::Abs(Center.Z-PawnCenter.Z)>Capsule->GetScaledCapsuleHalfHeight() ||
-        Eye.Z<=PawnCenter.Z-Capsule->GetScaledCapsuleHalfHeight()+12. ||
-        FVector::DistSquared2D(Eye,PawnCenter)<FMath::Square(Capsule->GetScaledCapsuleRadius()+12.) ||
-        FVector::DistSquared(Center,Pelvis)>FMath::Square(120.) ||
-        FVector::DistSquared(Eye,Pawn->GetActorLocation())>FMath::Square(600.) ||
-        FVector::DotProduct(Eye-Pawn->GetActorLocation(),Yaw.Vector())>=-15. ||
-        WorldBox.ComputeSquaredDistanceToPoint(Eye)<FMath::Square(12.))
-    { Reason=TEXT("the attached toy or close-up camera is outside its local framing or near-clip safety range"); return false; }
+        FVector::DistSquared(Center,Pelvis)>FMath::Square(120.))
+    { Reason=TEXT("the attached toy is outside its local framing range"); return false; }
 
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(YIXIFormalWaistSight),false,this);
-    Query.AddIgnoredActor(Pawn);
-    Query.AddIgnoredActor(Toy);
-    FHitResult Hit;
-    if (!ClearCameraPath(Center,Eye) || GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query))
-    { Reason=TEXT("the Night waist camera has an obstructed sightline"); return false; }
-    // The world sweep ignores the participant. Test the visible costume separately,
-    // stopping at the near surface of the toy rather than hitting the body behind it.
-    const FVector ToToy=(Center-Eye).GetSafeNormal();
-    const FVector ToyFront=Eye+ToToy*FMath::Max(0.,FMath::Sqrt(WorldBox.ComputeSquaredDistanceToPoint(Eye))-1.);
-    FCollisionQueryParams BodySight(SCENE_QUERY_STAT(YIXIFormalCostumeSight),false);
-    for (auto* Part : TInlineComponentArray<USkeletalMeshComponent*>(Pawn.Get()))
+    const auto TryEye=[&](const FVector& Eye)
     {
-        if (Part->IsRegistered() && Part->ShouldRender() && Part->GetPhysicsAsset() &&
-            Part->LineTraceComponent(Hit,Eye,ToyFront,BodySight))
-        { Reason=FString::Printf(TEXT("costume %s obscures the waist toy"),*Part->GetName()); return false; }
+        if (Eye.ContainsNaN() || Eye.Z<=PawnCenter.Z-Capsule->GetScaledCapsuleHalfHeight()+12. ||
+            FVector::DistSquared2D(Eye,PawnCenter)<FMath::Square(Capsule->GetScaledCapsuleRadius()+12.) ||
+            FVector::DistSquared(Eye,PawnCenter)>FMath::Square(600.) ||
+            FVector::DotProduct(Eye-PawnCenter,Yaw.Vector())>=-15. ||
+            WorldBox.ComputeSquaredDistanceToPoint(Eye)<FMath::Square(12.))
+        { Reason=TEXT("the Night close-up camera is outside its local framing or near-clip safety range"); return false; }
+
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(YIXIFormalWaistSight),false,this);
+        Query.AddIgnoredActor(Pawn);
+        Query.AddIgnoredActor(Toy);
+        FHitResult Hit;
+        if (!ClearCameraPath(Center,Eye) || GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query))
+        { Reason=TEXT("the Night waist camera has an obstructed sightline"); return false; }
+        // The world sweep ignores the participant. Stop the costume trace at the near toy surface.
+        const FVector ToToy=(Center-Eye).GetSafeNormal();
+        const FVector ToyFront=Eye+ToToy*FMath::Max(0.,FMath::Sqrt(WorldBox.ComputeSquaredDistanceToPoint(Eye))-1.);
+        FCollisionQueryParams BodySight(SCENE_QUERY_STAT(YIXIFormalCostumeSight),false);
+        for (auto* Part : TInlineComponentArray<USkeletalMeshComponent*>(Pawn.Get()))
+        {
+            if (Part->IsRegistered() && Part->ShouldRender() && Part->GetPhysicsAsset() &&
+                Part->LineTraceComponent(Hit,Eye,ToyFront,BodySight))
+            { Reason=FString::Printf(TEXT("costume %s obscures the waist toy"),*Part->GetName()); return false; }
+        }
+        View=LookAt(Eye,Center,LockedToyFOV);
+        View.Rotation.Roll=0.f;
+        Reason.Reset();
+        return true;
+    };
+
+    if (bMatchNightViewToFloor && FloorPose.IsValid())
+    {
+        const FVector DayLocal=FloorPose.InverseTransformVectorNoScale(FloorView.Location-FloorToyCenter);
+        const FVector NightDirection=ToyFrame.TransformVectorNoScale(DayLocal).GetSafeNormal();
+        if (!NightDirection.IsNearlyZero() && TryEye(Center+NightDirection*CloseupDistance)) return true;
     }
-    View=LookAt(Eye,Center,LockedToyFOV);
-    View.Rotation.Roll=0.f;
-    return true;
+    FVector Rear=NightCloseupDirection;
+    Rear.X=FMath::Min(-.25,Rear.X);
+    return TryEye(Center+Yaw.RotateVector(Rear.GetSafeNormal())*CloseupDistance);
 }
 
 void AYIXIV3Cinematic::LogFormalNightCamera(const TCHAR* Phase, const FMinimalViewInfo* Intended) const

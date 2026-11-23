@@ -90,7 +90,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Story|Voice")
 	bool IsVoicePlaying() const;
 
-	/** Stops speech and its reminder subtitle without changing the story state. */
+	/** Stops speech without changing the story state. */
 	UFUNCTION(BlueprintCallable, Category = "Story|Voice")
 	void StopVoice();
 

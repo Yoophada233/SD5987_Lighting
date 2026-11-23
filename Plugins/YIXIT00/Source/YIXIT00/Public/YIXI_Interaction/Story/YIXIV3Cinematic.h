@@ -106,6 +106,8 @@ public:
     UPROPERTY(EditAnywhere, Interp, Category="V3|Camera", meta=(ClampMin="5",ClampMax="120")) float ToyFOV = 34;
     UPROPERTY(EditAnywhere, Interp, Category="V3|Camera", meta=(ClampMin="30",Units="cm")) float CloseupDistance = 104;
     UPROPERTY(EditAnywhere, Category="V3|Camera") FVector NightCloseupDirection = FVector(-1,0.18,0.14);
+    /** Prefer the Day close-up's toy-relative direction when it gives a safe rear view at Night. */
+    UPROPERTY(EditAnywhere, Category="V3|Camera") bool bMatchNightViewToFloor = false;
     UPROPERTY(EditAnywhere, Category="V3|Timing", meta=(ClampMin="0.05",ClampMax="5.0",Units="s")) float EchoLeadSeconds = 4.0f;
     /** Normalized, monotonic fall from Release to Landed. */
     UPROPERTY(EditAnywhere, Interp, BlueprintReadWrite, Category="V3|Sequence") float DropProgress = 0;

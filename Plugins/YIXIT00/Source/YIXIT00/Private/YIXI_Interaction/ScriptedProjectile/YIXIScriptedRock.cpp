@@ -272,11 +272,11 @@ UDecalComponent* AYIXIScriptedRock::GetImpactDecalComponent() const
 		? ImpactDecal->GetDecal() : nullptr;
 }
 
-void AYIXIScriptedRock::SetImpactDecalHidden(bool bHidden)
+void AYIXIScriptedRock::SetImpactDecalHidden(bool bHideDecal)
 {
 	if (GetImpactDecalComponent())
 	{
-		ImpactDecal->SetActorHiddenInGame(bHidden);
+	ImpactDecal->SetActorHiddenInGame(bHideDecal);
 	}
 }
 

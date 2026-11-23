@@ -111,7 +111,6 @@ void AYIXIStoryGirl::StopVoice()
 	{
 		VoiceAnchor->Stop();
 	}
-	FSubtitleManager::GetSubtitleManager()->KillSubtitles(reinterpret_cast<PTRINT>(this));
 }
 
 bool AYIXIStoryGirl::HasAvailableDialogue() const
