@@ -1,5 +1,6 @@
 #include "YIXI_Interaction/YIXIInteractionHUDWidget.h"
 
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
@@ -14,6 +15,201 @@ namespace
 	{
 		return FLinearColor(Color.R, Color.G, Color.B, Color.A * Opacity);
 	}
+
+	TArray<FString> WrapSubtitle(const FString& Text, const FSlateFontInfo& Font,
+		const FSlateFontMeasure& Measure, double MaxWidth)
+	{
+		TArray<FString> Paragraphs;
+		Text.ParseIntoArrayLines(Paragraphs, false);
+		TArray<FString> Lines;
+		for (const FString& Paragraph : Paragraphs)
+		{
+			TArray<FString> Words;
+			Paragraph.ParseIntoArrayWS(Words);
+			FString Line;
+			for (const FString& Word : Words)
+			{
+				FString Candidate = Line.IsEmpty() ? Word : Line + TEXT(" ") + Word;
+				const FVector2D CandidateSize = Measure.Measure(Candidate, Font);
+				if (!Line.IsEmpty() && CandidateSize.X > MaxWidth)
+				{
+					Lines.Add(MoveTemp(Line));
+					Line = Word;
+				}
+				else
+				{
+					Line = MoveTemp(Candidate);
+				}
+			}
+			Lines.Add(MoveTemp(Line));
+		}
+		return Lines;
+	}
+}
+
+void UYIXIInteractionHUDWidget::ShowDialogueSubtitle(UObject* SpeakerSession, const FText& Text)
+{
+	if (!IsValid(SpeakerSession))
+	{
+		return;
+	}
+
+	ClearDialogueSubtitle();
+	if (bShowDialogueSubtitles && !Text.IsEmpty())
+	{
+		SubtitleOwner = SpeakerSession;
+		ActiveDialogueSubtitle = Text;
+		DialogueSubtitleAlpha = DialogueSubtitleEnterDuration <= 0.0f ? 1.0f : 0.0f;
+	}
+	if (const TSharedPtr<SWidget> Widget = GetCachedWidget())
+	{
+		Widget->Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
+void UYIXIInteractionHUDWidget::UpdateDialogueSubtitle(UObject* SpeakerSession, const FText& Text)
+{
+	if (SpeakerSession && SubtitleOwner.Get() == SpeakerSession && !bSubtitleExiting)
+	{
+		ActiveDialogueSubtitle = Text;
+		if (const TSharedPtr<SWidget> Widget = GetCachedWidget())
+		{
+			Widget->Invalidate(EInvalidateWidgetReason::Paint);
+		}
+	}
+}
+
+void UYIXIInteractionHUDWidget::HideDialogueSubtitle(UObject* SpeakerSession, bool bImmediate)
+{
+	if (!SpeakerSession || SubtitleOwner.Get() != SpeakerSession)
+	{
+		return;
+	}
+
+	if (bImmediate || DialogueSubtitleExitDuration <= 0.0f)
+	{
+		ClearDialogueSubtitle();
+		if (const TSharedPtr<SWidget> Widget = GetCachedWidget())
+		{
+			Widget->Invalidate(EInvalidateWidgetReason::Paint);
+		}
+	}
+	else if (!bSubtitleExiting)
+	{
+		bSubtitleExiting = true;
+		SubtitleExitStartAlpha = DialogueSubtitleAlpha;
+		SubtitleTransitionElapsed = 0.0f;
+	}
+}
+
+void UYIXIInteractionHUDWidget::ClearDialogueSubtitle()
+{
+	SubtitleOwner.Reset();
+	ActiveDialogueSubtitle = FText::GetEmpty();
+	DialogueSubtitleAlpha = 0.0f;
+	SubtitleTransitionElapsed = 0.0f;
+	SubtitleExitStartAlpha = 0.0f;
+	bSubtitleExiting = false;
+}
+
+void UYIXIInteractionHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (!SubtitleOwner.IsValid() || !bShowDialogueSubtitles)
+	{
+		if (SubtitleOwner.IsValid() || !ActiveDialogueSubtitle.IsEmpty() || DialogueSubtitleAlpha > 0.0f)
+		{
+			ClearDialogueSubtitle();
+			if (const TSharedPtr<SWidget> Widget = GetCachedWidget())
+			{
+				Widget->Invalidate(EInvalidateWidgetReason::Paint);
+			}
+		}
+		return;
+	}
+
+	if (!bSubtitleExiting && DialogueSubtitleAlpha >= 1.0f)
+	{
+		return;
+	}
+
+	SubtitleTransitionElapsed += InDeltaTime;
+	const float Duration = bSubtitleExiting ? DialogueSubtitleExitDuration : DialogueSubtitleEnterDuration;
+	const float Progress = Duration <= UE_SMALL_NUMBER ? 1.0f : FMath::Clamp(SubtitleTransitionElapsed / Duration, 0.0f, 1.0f);
+	const float EasedProgress = FMath::SmoothStep(0.0f, 1.0f, Progress);
+	DialogueSubtitleAlpha = bSubtitleExiting ? SubtitleExitStartAlpha * (1.0f - EasedProgress) : EasedProgress;
+	if (bSubtitleExiting && Progress >= 1.0f)
+	{
+		ClearDialogueSubtitle();
+	}
+	if (const TSharedPtr<SWidget> Widget = GetCachedWidget())
+	{
+		Widget->Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
+void UYIXIInteractionHUDWidget::NativeDestruct()
+{
+	ClearDialogueSubtitle();
+	Super::NativeDestruct();
+}
+
+int32 UYIXIInteractionHUDWidget::PaintDialogueSubtitle(const FGeometry& Geometry,
+	FSlateWindowElementList& OutDrawElements, int32 Layer, const FWidgetStyle& InWidgetStyle) const
+{
+	if (!bShowDialogueSubtitles || !SubtitleOwner.IsValid() || ActiveDialogueSubtitle.IsEmpty()
+		|| DialogueSubtitleAlpha <= UE_KINDA_SMALL_NUMBER || !FSlateApplication::IsInitialized())
+	{
+		return Layer;
+	}
+
+	const FVector2D CanvasSize = Geometry.GetLocalSize();
+	if (CanvasSize.X <= 0.0 || CanvasSize.Y <= 0.0)
+	{
+		return Layer;
+	}
+
+	FMargin SafePadding(0.0f);
+	const FVector2D ViewportPixels = UWidgetLayoutLibrary::GetViewportSize(this);
+	if (ViewportPixels.X > 0.0 && ViewportPixels.Y > 0.0)
+	{
+		FSlateApplication::Get().GetSafeZoneSize(SafePadding, ViewportPixels);
+		SafePadding = SafePadding * FMargin(CanvasSize.X / ViewportPixels.X, CanvasSize.Y / ViewportPixels.Y,
+			CanvasSize.X / ViewportPixels.X, CanvasSize.Y / ViewportPixels.Y);
+	}
+
+	constexpr int32 OutlineSize = 2;
+	FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FMath::Clamp(DialogueSubtitleFontSize, 12, 96));
+	const FLinearColor Ink = InWidgetStyle.GetColorAndOpacityTint() * FLinearColor(0.99f, 0.975f, 0.94f, 1.0f);
+	const FLinearColor Outline = WithOpacity(FLinearColor(0.015f, 0.012f, 0.01f, 0.95f), DialogueSubtitleAlpha * Ink.A);
+	Font.OutlineSettings = FFontOutlineSettings(OutlineSize, Outline);
+	const FSlateFontMeasure& Measure = *FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+	const double SafeWidth = FMath::Max(1.0, CanvasSize.X - SafePadding.Left - SafePadding.Right);
+	const double Width = FMath::Max(1.0, FMath::Min(SafeWidth, CanvasSize.X * FMath::Clamp(DialogueSubtitleMaxWidth, 0.2f, 1.0f))
+		- 2.0 * OutlineSize);
+	const TArray<FString> Lines = WrapSubtitle(ActiveDialogueSubtitle.ToString(), Font, Measure, Width);
+	const double LineHeight = Measure.GetMaxCharacterHeight(Font) + 4.0;
+	const double BlockHeight = LineHeight * Lines.Num();
+	const double MaxCenterY = CanvasSize.Y - SafePadding.Bottom - FMath::Max(12.0, CanvasSize.Y * 0.02) - BlockHeight * 0.5;
+	const double MinCenterY = SafePadding.Top + OutlineSize + BlockHeight * 0.5;
+	const double CenterY = FMath::Clamp(CanvasSize.Y * DialogueSubtitleScreenPosition.Y,
+		MinCenterY, FMath::Max(MinCenterY, MaxCenterY));
+	const double CenterX = FMath::Clamp(CanvasSize.X * DialogueSubtitleScreenPosition.X,
+		SafePadding.Left + Width * 0.5, CanvasSize.X - SafePadding.Right - Width * 0.5);
+
+	// At zero visibility the top edge, including the outline, is below the whole player viewport.
+	const double OffscreenY = CanvasSize.Y + OutlineSize + 1.0;
+	double LineY = FMath::Lerp(OffscreenY, CenterY - BlockHeight * 0.5, DialogueSubtitleAlpha);
+	for (const FString& Line : Lines)
+	{
+		const FVector2D TextSize = Measure.Measure(Line, Font);
+		const FVector2D TopLeft(CenterX - TextSize.X * 0.5, LineY);
+		FSlateDrawElement::MakeText(OutDrawElements, ++Layer,
+			Geometry.ToPaintGeometry(TextSize, FSlateLayoutTransform(TopLeft)), Line, Font,
+			ESlateDrawEffect::None, WithOpacity(Ink, DialogueSubtitleAlpha));
+		LineY += LineHeight;
+	}
+	return Layer;
 }
 
 void UYIXIInteractionHUDWidget::UpdatePrompt(EYIXIInteractionPromptState NewState,
@@ -68,14 +264,14 @@ int32 UYIXIInteractionHUDWidget::NativePaint(const FPaintArgs& Args, const FGeom
 		LayerId, InWidgetStyle, bParentEnabled);
 	if (State == EYIXIInteractionPromptState::Hidden || VisibleAlpha <= UE_KINDA_SMALL_NUMBER)
 	{
-		return Layer;
+		return PaintDialogueSubtitle(AllottedGeometry, OutDrawElements, Layer, InWidgetStyle);
 	}
 
 	const FVector2D Center = Position + ScreenOffset;
 	const FVector2D CanvasSize = AllottedGeometry.GetLocalSize();
 	if (Center.X < 0.0 || Center.Y < 0.0 || Center.X >= CanvasSize.X || Center.Y >= CanvasSize.Y)
 	{
-		return Layer;
+		return PaintDialogueSubtitle(AllottedGeometry, OutDrawElements, Layer, InWidgetStyle);
 	}
 
 	const float DotDiameter = FMath::Max(DotSize, 1.0f);
@@ -130,5 +326,5 @@ int32 UYIXIInteractionHUDWidget::NativePaint(const FPaintArgs& Args, const FGeom
 		}
 	}
 
-	return Layer;
+	return PaintDialogueSubtitle(AllottedGeometry, OutDrawElements, Layer, InWidgetStyle);
 }
