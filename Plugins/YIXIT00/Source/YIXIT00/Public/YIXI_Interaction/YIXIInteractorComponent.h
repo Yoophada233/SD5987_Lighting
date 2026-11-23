@@ -21,6 +21,9 @@ class YIXIT00_API UYIXIInteractorComponent : public UActorComponent
 public:
 	UYIXIInteractorComponent();
 
+	/** Finds the same non-interactive HUD already used by the local controller's interaction component. */
+	static UYIXIInteractionHUDWidget* FindDialogueHUD(APlayerController& Controller);
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Interaction|Input")
 	FKey InteractionKey = EKeys::E;
 

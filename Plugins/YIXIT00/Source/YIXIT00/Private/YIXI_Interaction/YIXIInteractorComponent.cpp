@@ -82,6 +82,24 @@ APlayerController* UYIXIInteractorComponent::ResolveLocalController() const
 	return Controller && Controller->GetPawn() && Controller->GetLocalPlayer() ? Controller : nullptr;
 }
 
+UYIXIInteractionHUDWidget* UYIXIInteractorComponent::FindDialogueHUD(APlayerController& Controller)
+{
+	UYIXIInteractorComponent* Interactor = Controller.FindComponentByClass<UYIXIInteractorComponent>();
+	if (!Interactor)
+	{
+		if (APawn* Pawn = Controller.GetPawn())
+		{
+			Interactor = Pawn->FindComponentByClass<UYIXIInteractorComponent>();
+		}
+	}
+	if (Interactor && Interactor->ResolveLocalController() == &Controller)
+	{
+		Interactor->EnsureHUD(Controller);
+		return Interactor->HUDWidget;
+	}
+	return nullptr;
+}
+
 void UYIXIInteractorComponent::EnsureHUD(APlayerController& Controller)
 {
 	if (HUDWidget)
