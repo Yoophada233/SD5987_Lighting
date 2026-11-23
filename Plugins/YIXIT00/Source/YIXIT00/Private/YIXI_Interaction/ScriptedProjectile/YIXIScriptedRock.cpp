@@ -256,7 +256,7 @@ float AYIXIScriptedRock::EvaluateVerticalShape(float Alpha) const
 	return 4.0f * Alpha * (1.0f - Alpha);
 }
 
-void AYIXIScriptedRock::SetImpactDecalsHidden(bool bHidden, bool bClearFadeOut)
+void AYIXIScriptedRock::SetImpactDecalsHidden(bool bHideDecals, bool bClearFadeOut)
 {
 	TArray<ADecalActor*, TInlineAllocator<4>> DecalActors;
 	DecalActors.Add(ImpactDecal.Get());
@@ -275,7 +275,7 @@ void AYIXIScriptedRock::SetImpactDecalsHidden(bool bHidden, bool bClearFadeOut)
 		if (UDecalComponent* Decal = DecalActor->GetDecal())
 		{
 			bFoundDecal = true;
-			DecalActor->SetActorHiddenInGame(bHidden);
+			DecalActor->SetActorHiddenInGame(bHideDecals);
 			if (bClearFadeOut)
 			{
 				// The story owns decal lifetime. Cancel any authored fade-out timer when play starts.

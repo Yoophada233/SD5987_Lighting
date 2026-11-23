@@ -151,7 +151,7 @@ protected:
 private:
 	float EvaluateVerticalShape(float Alpha) const;
 	FTransform MakeRockMeshPose(const FVector& PathLocation, const FQuat& PathRotation) const;
-	void SetImpactDecalsHidden(bool bHidden, bool bClearFadeOut = false);
+	void SetImpactDecalsHidden(bool bHideDecals, bool bClearFadeOut = false);
 	void FinishTravel();
 	void TryEnableBlockage();
 

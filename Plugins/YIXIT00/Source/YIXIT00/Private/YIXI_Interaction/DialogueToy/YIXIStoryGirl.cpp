@@ -10,7 +10,6 @@
 #include "GameFramework/PlayerController.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
-#include "SubtitleManager.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "YIXI_Interaction/YIXIInteractionHUDWidget.h"
@@ -119,13 +118,11 @@ bool AYIXIStoryGirl::IsVoicePlaying() const
 void AYIXIStoryGirl::StopVoice()
 {
 	FinishDialogue(true, TEXT("Stopped"));
+	HideReminderSubtitle(true);
 	if (IsValid(VoiceAnchor) && VoiceAnchor->IsPlaying())
 	{
 		VoiceAnchor->Stop();
 	}
-	// NOTE: FSubtitleManager::KillSubtitles is not exported (no ENGINE_API) in 5.8,
-	// so calling it breaks the link. Stopping the voice is enough; active cues
-	// expire on their own (reminder uses a 3s duration).
 }
 
 bool AYIXIStoryGirl::HasAvailableDialogue() const
@@ -173,19 +170,34 @@ void AYIXIStoryGirl::Interact_Implementation(APawn* Interactor)
 		{
 			return;
 		}
-		PlayVoice(ReminderVoice);
-		if (const APlayerController* Controller = Cast<APlayerController>(Interactor->GetController());
-			Controller && Controller->IsLocalController())
+		PlayVoice(ReminderVoice, true);
+		if (APlayerController* Controller = Cast<APlayerController>(Interactor->GetController());
+			bDialogueSubtitlesEnabled && Controller && Controller->IsLocalController())
 		{
-			constexpr float ReminderDuration = 3.0f;
-			TArray<FSubtitleCue> Cues;
-			FSubtitleCue& Cue = Cues.AddDefaulted_GetRef();
-			Cue.Text = LOCTEXT("ReminderDialogue", "我把玩具落在后院了。");
-			Cue.Time = 0.0f;
-			FSubtitleManager::GetSubtitleManager()->QueueSubtitles(
-				reinterpret_cast<PTRINT>(this), 1.0f, false, true,
-				ReminderDuration, Cues, 0.0f, GetWorld()->GetAudioTimeSeconds());
+			if (UYIXIInteractionHUDWidget* HUD = UYIXIInteractorComponent::FindDialogueHUD(*Controller))
+			{
+				ReminderHUD = HUD;
+				HUD->ShowDialogueSubtitle(this, LOCTEXT("ReminderDialogue", "我把玩具落在后院了。"));
+				GetWorldTimerManager().SetTimer(ReminderSubtitleTimer,
+					FTimerDelegate::CreateUObject(this, &ThisClass::HideReminderSubtitle, false), 3.0f, false);
+			}
 		}
+	}
+}
+
+void AYIXIStoryGirl::HideReminderSubtitle(bool bImmediate)
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReminderSubtitleTimer);
+	}
+	if (UYIXIInteractionHUDWidget* HUD = ReminderHUD.Get())
+	{
+		HUD->HideDialogueSubtitle(this, bImmediate);
+	}
+	if (bImmediate)
+	{
+		ReminderHUD.Reset();
 	}
 }
 
@@ -446,7 +458,7 @@ void AYIXIStoryGirl::FinishDialogue(bool bCancelled, const TCHAR* Reason)
 		EndingSession, bCancelled, Reason);
 }
 
-void AYIXIStoryGirl::PlayVoice(USoundBase* Sound)
+void AYIXIStoryGirl::PlayVoice(USoundBase* Sound, bool bUseHUDSubtitle)
 {
 	if (!IsValid(Sound) || !IsValid(VoiceAnchor) || VoiceVolume <= 0.0f || IsVoicePlaying())
 	{
@@ -457,7 +469,10 @@ void AYIXIStoryGirl::PlayVoice(USoundBase* Sound)
 	VoiceAnchor->bOverrideAttenuation = !IsValid(VoiceAttenuation);
 	VoiceAnchor->SetVolumeMultiplier(VoiceVolume);
 	VoiceAnchor->SetSound(Sound);
+	const bool bPreviouslySuppressed = VoiceAnchor->bSuppressSubtitles;
+	VoiceAnchor->bSuppressSubtitles = bPreviouslySuppressed || bUseHUDSubtitle;
 	VoiceAnchor->Play();
+	VoiceAnchor->bSuppressSubtitles = bPreviouslySuppressed;
 }
 
 FYIXIInteractionPrompt AYIXIStoryGirl::GetInteractionPrompt_Implementation(APawn* Interactor) const

@@ -147,7 +147,8 @@ protected:
 
 private:
 	bool HasAvailableDialogue() const;
-	void PlayVoice(USoundBase* Sound);
+	void PlayVoice(USoundBase* Sound, bool bUseHUDSubtitle = false);
+	void HideReminderSubtitle(bool bImmediate);
 	void StartRequestDialogue(APawn& Pawn, APlayerController& Controller);
 	void StartPlayerReply(uint32 Session);
 	void StartDialogueClip(UAudioComponent& Component, USoundBase& Sound, const FText& Line,
@@ -172,12 +173,14 @@ private:
 	TWeakObjectPtr<APawn> DialoguePawn;
 	TWeakObjectPtr<APlayerController> DialogueController;
 	TWeakObjectPtr<UYIXIInteractionHUDWidget> DialogueHUD;
+	TWeakObjectPtr<UYIXIInteractionHUDWidget> ReminderHUD;
 	TWeakObjectPtr<UAudioComponent> DialogueClip;
 	FDelegateHandle ClipFinishedHandle;
 	FDelegateHandle ClipStateHandle;
 	FTimerHandle DialogueGapTimer;
 	FTimerHandle DialogueWatchTimer;
 	FTimerHandle SubtitleCueTimer;
+	FTimerHandle ReminderSubtitleTimer;
 	uint32 DialogueSession = 0;
 	double ClipStartedAt = 0.0;
 	float ClipDuration = 0.0f;
