@@ -12,8 +12,25 @@
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "UObject/ConstructorHelpers.h"
+#include "DataDrivenShaderPlatformInfo.h"
+#include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
+#include "RenderUtils.h"
+#include "RHI.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogYIXIInteractFire, Log, All);
+
+namespace
+{
+	bool CanRenderVolumeFire()
+	{
+		const IConsoleVariable* VolumesAllowed =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("r.HeterogeneousVolumes.Allowed"));
+		return (!VolumesAllowed || VolumesAllowed->GetInt() != 0)
+			&& FDataDrivenShaderPlatformInfo::IsValid(GMaxRHIShaderPlatform)
+			&& DoesRuntimeSupportHeterogeneousVolumes(GMaxRHIShaderPlatform);
+	}
+}
 
 AYIXIInteractFire::AYIXIInteractFire()
 {
@@ -64,6 +81,10 @@ AYIXIInteractFire::AYIXIInteractFire()
 		UE_LOG(LogYIXIInteractFire, Warning, TEXT("Default NS_InteractFire not found; assign FireSystem in Details."));
 	}
 
+	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> SpriteFallback(
+		TEXT("/Game/F_FreeFlameFx_Pack/FX/NS_Flame_8_Torch.NS_Flame_8_Torch"));
+	SpriteFireFallback = SpriteFallback.Object;
+
 	// 默认火源采样网格：模板自带的小火源，跟着 FireAnchor 走。
 	// 想让火焰贴着你的模型表面烧，在细节面板把 SourceMesh 换成和 BodyMesh 同一个模型。
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultSource(TEXT("/NiagaraFluids/Meshes/FireSourceMesh.FireSourceMesh"));
@@ -90,6 +111,14 @@ void AYIXIInteractFire::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Keep the placement cube available in the editor without rendering it or blocking players in-game.
+	const UStaticMesh* DefaultBody = GetDefault<AYIXIInteractFire>()->BodyMesh->GetStaticMesh();
+	if (BodyMesh && DefaultBody && BodyMesh->GetStaticMesh() == DefaultBody)
+	{
+		BodyMesh->SetHiddenInGame(true);
+		BodyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
 	// 游戏里强制关红框：只在编辑器摆放时显示。
 	bDrawSimulationBounds = false;
 	ApplyTemplateAndScale();
@@ -102,7 +131,7 @@ void AYIXIInteractFire::BeginPlay()
 			EnableInput(PC);
 			if (InputComponent)
 			{
-				InputComponent->BindKey(InteractionKey, IE_Pressed, this, &AYIXIInteractFire::InteractionPressed);
+				InputComponent->BindKey(InteractionKey, IE_Pressed, this, &AYIXIInteractFire::InteractionPressed).bConsumeInput = false;
 			}
 		}
 	}
@@ -176,13 +205,38 @@ void AYIXIInteractFire::InteractionPressed()
 	{
 		return;
 	}
+
+	const FVector PlayerLocation = Pawn->GetActorLocation();
+	const double DistanceSquared = FVector::DistSquared(PlayerLocation, GetActorLocation());
+	if (DistanceSquared > FMath::Square(InteractionRadius))
+	{
+		return;
+	}
+
+	// Non-consuming bindings let nearby fires receive E even when a distant fire bound it first.
+	// Pick just one recipient when their interaction areas overlap.
+	for (TActorIterator<AYIXIInteractFire> It(World); It; ++It)
+	{
+		const AYIXIInteractFire* Other = *It;
+		if (Other == this || !Other->bEnableKeyInteract || !Other->InputComponent || Other->InteractionKey != InteractionKey)
+		{
+			continue;
+		}
+		const double OtherDistance = FVector::DistSquared(PlayerLocation, Other->GetActorLocation());
+		if (OtherDistance <= FMath::Square(Other->InteractionRadius)
+			&& (OtherDistance < DistanceSquared || (OtherDistance == DistanceSquared && Other->GetUniqueID() < GetUniqueID())))
+		{
+			return;
+		}
+	}
 	Interact(Pawn);
 }
 
 void AYIXIInteractFire::ApplyFireState()
 {
+	const bool bInPlay = HasActorBegunPlay() || IsActorBeginningPlay();
 	// 编辑器预览时灯光保持可见，方便调位置/强度；进游戏才跟火焰开关走。
-	if (!HasActorBegunPlay())
+	if (!bInPlay)
 	{
 		if (IsValid(FireLight))
 		{
@@ -199,7 +253,7 @@ void AYIXIInteractFire::ApplyFireState()
 	}
 	// HasBegunPlay 为 false 时（编辑器预览）只切激活标记，不调 Activate/Deactivate。
 	// 注意：直接写 bAutoActivate 字段，不要调 SetAutoActivate（构造后调用会报 warning）。
-	if (!HasActorBegunPlay())
+	if (!bInPlay)
 	{
 		FireEffect->bAutoActivate = bFireOn;
 		return;
@@ -208,6 +262,11 @@ void AYIXIInteractFire::ApplyFireState()
 	{
 		ApplyTemplateAndScale();
 		FireEffect->Activate(true);
+	}
+	else if (SpriteFireFallback && FireEffect->GetAsset() == SpriteFireFallback)
+	{
+		// The looping flipbook holds a particle after emission stops. Remove it when the torch is switched off.
+		FireEffect->DeactivateImmediate();
 	}
 	else
 	{
@@ -221,18 +280,23 @@ void AYIXIInteractFire::ApplyTemplateAndScale()
 	{
 		return;
 	}
-	if (IsValid(FireSystem) && FireEffect->GetAsset() != FireSystem)
+	const bool bUseSprites = IsValid(SpriteFireFallback)
+		&& FireSystem == GetDefault<AYIXIInteractFire>()->FireSystem
+		&& (!IsValid(FireSystem) || !CanRenderVolumeFire());
+	UNiagaraSystem* SelectedSystem = bUseSprites ? SpriteFireFallback.Get() : FireSystem.Get();
+	if (IsValid(SelectedSystem) && FireEffect->GetAsset() != SelectedSystem)
 	{
-		// 保留我们后面要重设的 override 参数，不被模板切换清空。
-		FireEffect->SetAsset(FireSystem, false);
+		FireEffect->SetAsset(SelectedSystem, false);
 	}
 	// Grid3D 流体需要火源采样网格：没有它只画包围盒、不出火。
 	// 要贴着自己模型烧，就把 SourceMesh 换成和 BodyMesh 同一个模型。
-	if (IsValid(SourceMesh))
+	if (!bUseSprites)
 	{
-		FireEffect->SetVariableStaticMesh(FName(TEXT("User.StaticMesh")), SourceMesh);
+		if (IsValid(SourceMesh))
+		{
+			FireEffect->SetVariableStaticMesh(FName(TEXT("User.StaticMesh")), SourceMesh);
+		}
+		FireEffect->SetVariableBool(FName(TEXT("User.DrawBounds")), bDrawSimulationBounds);
 	}
-	// 截图里的红框就是这个，仅调试用。
-	FireEffect->SetVariableBool(FName(TEXT("User.DrawBounds")), bDrawSimulationBounds);
 	FireEffect->SetRelativeScale3D(FVector(FMath::Max(0.01f, FireEffectScale)));
 }

@@ -67,6 +67,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Spawn")
 	TObjectPtr<UNiagaraSystem> FireSystem;
 
+	/** Sprite fire used in place of the default volume fire when volume rendering is disabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|Fire|Spawn", AdvancedDisplay)
+	TObjectPtr<UNiagaraSystem> SpriteFireFallback;
+
 	/** 火焰形状采样网格：Grid3D 流体从这个模型的表面采样火源。
 	 * 默认是模板自带的小火源网格，跟着 FireAnchor 走；
 	 * 想让火焰贴着你的模型表面烧，就把它换成和 BodyMesh 同一个模型。 */
