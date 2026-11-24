@@ -21,6 +21,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|BGM", meta = (ClampMin = "0.0", UIMax = "1.0", DisplayName = "BGM Volume"))
 	float MusicVolume = 1.0f;
 
+	/** Seconds to wait after the player enters before the sound starts fading in. Zero plays immediately. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|BGM", meta = (ClampMin = "0.0", Units = "s"))
+	float PlaybackDelay = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YIXI|BGM", meta = (ClampMin = "0.0", Units = "s"))
 	float FadeInDuration = 2.0f;
 
@@ -41,6 +45,10 @@ private:
 	UFUNCTION()
 	void OnLocalPlayerEntered(APawn* Pawn);
 
+	bool CanStartMusic() const;
+	void StartMusic();
+
+	FTimerHandle PlaybackDelayTimer;
 	bool bHasPlayed = false;
 };
 

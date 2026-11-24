@@ -4,6 +4,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Sound/SoundBase.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -36,14 +37,38 @@ void AYIXIBGMStartBox::BeginPlay()
 void AYIXIBGMStartBox::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	OnPlayerEntered.RemoveDynamic(this, &ThisClass::OnLocalPlayerEntered);
+	GetWorldTimerManager().ClearTimer(PlaybackDelayTimer);
 	MusicAudio->Stop();
 	Super::EndPlay(EndPlayReason);
 }
 
 void AYIXIBGMStartBox::OnLocalPlayerEntered(APawn* Pawn)
 {
-	if (!IsLocalPlayerPawn(Pawn) || !IsValid(MusicSound) || !(MusicVolume > 0.0f)
-		|| (bPlayOnce && bHasPlayed) || MusicAudio->IsPlaying())
+	FTimerManager& Timers = GetWorldTimerManager();
+	if (!IsLocalPlayerPawn(Pawn) || !CanStartMusic() || Timers.TimerExists(PlaybackDelayTimer))
+	{
+		return;
+	}
+
+	if (FMath::IsFinite(PlaybackDelay) && PlaybackDelay > 0.0f)
+	{
+		Timers.SetTimer(PlaybackDelayTimer, this, &ThisClass::StartMusic, PlaybackDelay, false);
+	}
+	else
+	{
+		StartMusic();
+	}
+}
+
+bool AYIXIBGMStartBox::CanStartMusic() const
+{
+	return IsValid(MusicSound) && MusicVolume > 0.0f
+		&& (!bPlayOnce || !bHasPlayed) && !MusicAudio->IsPlaying();
+}
+
+void AYIXIBGMStartBox::StartMusic()
+{
+	if (!CanStartMusic())
 	{
 		return;
 	}
@@ -56,6 +81,7 @@ void AYIXIBGMStartBox::OnLocalPlayerEntered(APawn* Pawn)
 
 void AYIXIBGMStartBox::FadeOutMusic(float Duration)
 {
+	GetWorldTimerManager().ClearTimer(PlaybackDelayTimer);
 	if (!MusicAudio->IsPlaying() || MusicAudio->GetPlayState() == EAudioComponentPlayState::FadingOut)
 	{
 		return;
