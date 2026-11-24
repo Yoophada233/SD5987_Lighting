@@ -95,6 +95,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YIXI|Scripted Rock")
 	bool bEnableBlockageAfterImpact = false;
 
+	/** Hide the flying rock mesh at impact. Impact cues and blockage still use the landing pose. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Impact")
+	bool bHideMeshOnImpact = false;
+
 	/** Pick the existing crack decal at this rock's landing site. It stays visible in the editor. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "YIXI|Scripted Rock|Impact")
 	TObjectPtr<ADecalActor> ImpactDecal;

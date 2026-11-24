@@ -327,9 +327,9 @@ bool AYIXIV3Cinematic::ClearCameraPath(FVector Start, FVector End, bool bToyRail
 
 bool AYIXIV3Cinematic::ClearToySight(FVector Subject, FVector Eye) const
 {
-    // The story rock can intentionally have no camera collision. It still occludes the image.
+    // A visible story rock can occlude the image even with camera collision disabled.
     const AYIXIScriptedRock* RockActor=UsesDayBindings() ? DayPreviewRock.Get() : (Story ? Story->AttackCue.Get() : nullptr);
-    if (IsValid(RockActor) && RockActor->RockMesh)
+    if (IsValid(RockActor) && !RockActor->IsHidden() && RockActor->RockMesh && RockActor->RockMesh->IsVisible())
     {
         const FBox Rock=RockActor->RockMesh->Bounds.GetBox().ExpandBy(3.);
         if (Rock.IsInsideOrOn(Eye) || FMath::LineBoxIntersection(Rock,Subject,Eye,Eye-Subject)) return false;

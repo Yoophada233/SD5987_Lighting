@@ -293,6 +293,10 @@ void AYIXIScriptedRock::SetImpactDecalsHidden(bool bHideDecals, bool bClearFadeO
 void AYIXIScriptedRock::FinishTravel()
 {
 	RockMesh->SetWorldTransform(MakeRockMeshPose(LandingPose.GetLocation(), LandingPose.GetRotation()));
+	if (bHideMeshOnImpact)
+	{
+		RockMesh->SetHiddenInGame(true);
+	}
 	bImpactOccurred = true;
 	RockState = bPendingBlockage ? EYIXIScriptedRockState::WaitingForClearance
 		: EYIXIScriptedRockState::Impacted;
